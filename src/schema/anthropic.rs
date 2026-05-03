@@ -6,7 +6,7 @@ use serde_json::Value;
 pub type ExtraFields = BTreeMap<String, Value>;
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "snake_case")]
 pub struct AnthropicMessagesRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
@@ -33,7 +33,7 @@ pub struct AnthropicMessagesRequest {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "snake_case")]
 pub struct AnthropicMessage {
     pub role: String,
     pub content: AnthropicContent,
@@ -58,7 +58,7 @@ pub enum AnthropicContent {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "snake_case")]
 pub struct AnthropicContentBlock {
     #[serde(rename = "type")]
     pub kind: String,
@@ -85,7 +85,7 @@ pub struct AnthropicContentBlock {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "snake_case")]
 pub struct AnthropicMessagesResponse {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,
@@ -106,7 +106,7 @@ pub struct AnthropicMessagesResponse {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "snake_case")]
 pub struct AnthropicStreamEvent {
     #[serde(default, rename = "type", skip_serializing_if = "Option::is_none")]
     pub kind: Option<String>,
@@ -125,7 +125,7 @@ pub struct AnthropicStreamEvent {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "snake_case")]
 pub struct AnthropicDelta {
     #[serde(default, rename = "type", skip_serializing_if = "Option::is_none")]
     pub kind: Option<String>,
@@ -144,7 +144,7 @@ pub struct AnthropicDelta {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "snake_case")]
 pub struct AnthropicUsage {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub input_tokens: Option<u64>,

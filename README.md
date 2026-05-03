@@ -38,6 +38,12 @@ Provider adapters only transform package shapes:
 - `translator`: behavior traits for translating schema/value payloads to and from universal types
 - `adapter`: traits and context for provider-specific package transforms
 
+## Built-in Translators
+
+- `OpenAiChatTranslator`: `/v1/chat/completions`
+- `OpenAiResponsesTranslator`: `/v1/responses`
+- `AnthropicMessagesTranslator`: `/v1/messages`
+
 ## Status
 
-This crate is an early API skeleton. The schema layer is deliberately permissive and keeps unknown fields so providers can evolve without breaking the proxy. The first production integrations should keep concrete OpenAI/Anthropic translators in host code until the golden fixtures are ready to migrate here.
+This crate is an early API skeleton. The schema layer is deliberately permissive and keeps unknown fields so providers can evolve without breaking the proxy. Built-in translators cover the common request, response, and stream packet shapes; provider-specific behavior should still live in provider adapters or host code.

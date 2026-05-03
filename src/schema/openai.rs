@@ -6,7 +6,7 @@ use serde_json::Value;
 pub type ExtraFields = BTreeMap<String, Value>;
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "snake_case")]
 pub struct ChatCompletionRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
@@ -31,7 +31,7 @@ pub struct ChatCompletionRequest {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "snake_case")]
 pub struct ChatMessage {
     pub role: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -47,7 +47,7 @@ pub struct ChatMessage {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "snake_case")]
 pub struct ChatMessageDelta {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub role: Option<String>,
@@ -71,7 +71,7 @@ pub enum OpenAiContent {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "snake_case")]
 pub struct OpenAiContentPart {
     #[serde(rename = "type")]
     pub kind: String,
@@ -94,7 +94,7 @@ pub struct OpenAiContentPart {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "snake_case")]
 pub struct OpenAiImageUrl {
     pub url: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -104,7 +104,7 @@ pub struct OpenAiImageUrl {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "snake_case")]
 pub struct ChatToolCall {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,
@@ -117,7 +117,7 @@ pub struct ChatToolCall {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "snake_case")]
 pub struct ChatFunctionCall {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
@@ -128,7 +128,7 @@ pub struct ChatFunctionCall {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "snake_case")]
 pub struct ChatCompletionResponse {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,
@@ -143,7 +143,7 @@ pub struct ChatCompletionResponse {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "snake_case")]
 pub struct ChatCompletionChunk {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,
@@ -158,7 +158,7 @@ pub struct ChatCompletionChunk {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "snake_case")]
 pub struct ChatChoice {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub index: Option<u64>,
@@ -173,7 +173,7 @@ pub struct ChatChoice {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "snake_case")]
 pub struct ResponsesRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
@@ -209,7 +209,7 @@ pub enum ResponsesInput {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "snake_case")]
 pub struct ResponsesItem {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,
@@ -234,7 +234,7 @@ pub struct ResponsesItem {
 pub type ResponsesOutputItem = ResponsesItem;
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "snake_case")]
 pub struct ResponsesResponse {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,
@@ -253,7 +253,7 @@ pub struct ResponsesResponse {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "snake_case")]
 pub struct ResponsesStreamEvent {
     #[serde(default, rename = "type", skip_serializing_if = "Option::is_none")]
     pub kind: Option<String>,
@@ -278,7 +278,7 @@ pub struct ResponsesStreamEvent {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "snake_case")]
 pub struct OpenAiReasoning {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub effort: Option<String>,
@@ -289,7 +289,7 @@ pub struct OpenAiReasoning {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "snake_case")]
 pub struct OpenAiUsage {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prompt_tokens: Option<u64>,
