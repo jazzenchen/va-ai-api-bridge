@@ -432,35 +432,51 @@ fn decode_message(message: AnthropicMessage, request: &mut UniversalRequest) {
                 name,
                 arguments,
                 extensions,
-            } => request.input.push(UniversalItem::ToolCall {
-                id,
-                name,
-                arguments,
-                extensions,
-            }),
+            } => {
+                flush_message_blocks(request, role, &mut message_blocks);
+                request.input.push(UniversalItem::ToolCall {
+                    id,
+                    name,
+                    arguments,
+                    extensions,
+                });
+            }
             ContentBlock::ToolResult {
                 tool_call_id,
                 content,
                 is_error,
                 extensions,
-            } => request.input.push(UniversalItem::ToolResult {
-                tool_call_id,
-                content,
-                is_error,
-                extensions,
-            }),
+            } => {
+                flush_message_blocks(request, role, &mut message_blocks);
+                request.input.push(UniversalItem::ToolResult {
+                    tool_call_id,
+                    content,
+                    is_error,
+                    extensions,
+                });
+            }
             block => message_blocks.push(block),
         }
     }
 
-    if !message_blocks.is_empty() {
-        request.input.push(UniversalItem::Message {
-            role,
-            id: None,
-            content: message_blocks,
-            extensions: common::empty_extensions(),
-        });
+    flush_message_blocks(request, role, &mut message_blocks);
+}
+
+fn flush_message_blocks(
+    request: &mut UniversalRequest,
+    role: Role,
+    message_blocks: &mut Vec<ContentBlock>,
+) {
+    if message_blocks.is_empty() {
+        return;
     }
+
+    request.input.push(UniversalItem::Message {
+        role,
+        id: None,
+        content: std::mem::take(message_blocks),
+        extensions: common::empty_extensions(),
+    });
 }
 
 fn anthropic_message_value(role: &str, content: AnthropicContent) -> Result<Value> {

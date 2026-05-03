@@ -1,0 +1,32 @@
+[
+  {
+    "type": "response_start",
+    "id": "chatcmpl_1",
+    "model": "gpt-test"
+  },
+  {
+    "type": "message_start",
+    "id": "chatcmpl_1:0",
+    "role": "assistant"
+  },
+  {
+    "type": "content_start",
+    "index": 0,
+    "block": {
+      "type": "text",
+      "text": ""
+    }
+  },
+  {
+    "type": "text_delta",
+    "index": 0,
+    "text": "hi"
+  },
+  {
+    "type": "message_done",
+    "finishReason": "stop"
+  },
+  {
+    "type": "response_done"
+  }
+]

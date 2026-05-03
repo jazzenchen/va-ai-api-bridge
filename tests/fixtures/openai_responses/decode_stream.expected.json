@@ -1,0 +1,28 @@
+[
+  {
+    "type": "response_start",
+    "id": "resp_1",
+    "model": "gpt-test"
+  },
+  {
+    "type": "content_start",
+    "index": 0,
+    "block": {
+      "type": "text",
+      "text": ""
+    }
+  },
+  {
+    "type": "text_delta",
+    "index": 0,
+    "text": "hi"
+  },
+  {
+    "type": "response_done",
+    "usage": {
+      "inputTokens": 5,
+      "outputTokens": 2,
+      "totalTokens": 7
+    }
+  }
+]

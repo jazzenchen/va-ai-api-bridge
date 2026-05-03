@@ -1,0 +1,27 @@
+[
+  {
+    "type": "response.created",
+    "response": {
+      "id": "resp_1",
+      "model": "gpt-test"
+    }
+  },
+  {
+    "type": "response.output_text.delta",
+    "output_index": 0,
+    "content_index": 0,
+    "delta": "hi"
+  },
+  {
+    "type": "response.completed",
+    "response": {
+      "id": "resp_1",
+      "model": "gpt-test",
+      "usage": {
+        "input_tokens": 5,
+        "output_tokens": 2,
+        "total_tokens": 7
+      }
+    }
+  }
+]

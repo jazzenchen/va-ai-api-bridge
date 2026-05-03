@@ -20,7 +20,11 @@ pub struct EncodeState {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
+#[serde(
+    tag = "type",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase"
+)]
 pub enum UniversalEvent {
     ResponseStart {
         #[serde(default, skip_serializing_if = "Option::is_none")]

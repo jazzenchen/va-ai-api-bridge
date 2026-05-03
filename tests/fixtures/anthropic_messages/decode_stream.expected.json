@@ -1,0 +1,41 @@
+[
+  {
+    "type": "response_start",
+    "id": "msg_1",
+    "model": "claude-test"
+  },
+  {
+    "type": "message_start",
+    "id": "msg_1",
+    "role": "assistant"
+  },
+  {
+    "type": "content_start",
+    "index": 0,
+    "block": {
+      "type": "text",
+      "text": ""
+    }
+  },
+  {
+    "type": "text_delta",
+    "index": 0,
+    "text": "hi"
+  },
+  {
+    "type": "content_done",
+    "index": 0
+  },
+  {
+    "type": "message_done",
+    "finishReason": "stop",
+    "usage": {
+      "inputTokens": 5,
+      "outputTokens": 2,
+      "totalTokens": 7
+    }
+  },
+  {
+    "type": "response_done"
+  }
+]

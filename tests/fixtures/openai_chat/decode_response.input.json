@@ -1,0 +1,19 @@
+{
+  "id": "chatcmpl_1",
+  "model": "gpt-test",
+  "choices": [
+    {
+      "index": 0,
+      "message": {
+        "role": "assistant",
+        "content": "hi"
+      },
+      "finish_reason": "stop"
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 5,
+    "completion_tokens": 2,
+    "total_tokens": 7
+  }
+}

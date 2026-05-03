@@ -1,0 +1,32 @@
+{
+  "model": "gpt-test",
+  "instructions": [
+    {
+      "type": "text",
+      "text": "be crisp"
+    }
+  ],
+  "input": [
+    {
+      "type": "message",
+      "role": "user",
+      "content": [
+        {
+          "type": "text",
+          "text": "hello"
+        }
+      ]
+    }
+  ],
+  "tools": [
+    {
+      "name": "lookup",
+      "inputSchema": {
+        "type": "object"
+      }
+    }
+  ],
+  "source": {
+    "protocol": "openai-responses"
+  }
+}

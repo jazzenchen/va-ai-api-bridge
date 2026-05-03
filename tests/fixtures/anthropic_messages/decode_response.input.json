@@ -1,0 +1,16 @@
+{
+  "id": "msg_1",
+  "model": "claude-test",
+  "role": "assistant",
+  "content": [
+    {
+      "type": "text",
+      "text": "hi"
+    }
+  ],
+  "stop_reason": "end_turn",
+  "usage": {
+    "input_tokens": 5,
+    "output_tokens": 2
+  }
+}
