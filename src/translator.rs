@@ -11,7 +11,7 @@ pub struct WireEvent {
     pub data: Value,
 }
 
-pub trait WireCodec {
+pub trait WireTranslator {
     fn protocol(&self) -> WireProtocol;
 
     fn decode_request(&self, raw: Value) -> Result<UniversalRequest>;

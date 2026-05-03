@@ -9,7 +9,7 @@ Protocol translation primitives for AI API request and response shapes.
 ```text
 wire API payload
   -> schema::{openai, anthropic} or serde_json::Value
-  -> WireCodec
+  -> WireTranslator
   -> UniversalRequest / UniversalEvent
   -> optional provider adapter
   -> provider wire payload
@@ -34,10 +34,10 @@ Provider adapters only transform package shapes:
 - `protocol`: supported wire protocol identifiers
 - `schema`: provider catalog types and light serde shells for supported wire payloads
 - `universal`: protocol-neutral request, content, tool, reasoning, and usage types
-- `stream`: protocol-neutral streaming event types and codec state
-- `codec`: behavior traits for translating schema/value payloads to and from universal types
+- `stream`: protocol-neutral streaming event types and translator state
+- `translator`: behavior traits for translating schema/value payloads to and from universal types
 - `adapter`: traits and context for provider-specific package transforms
 
 ## Status
 
-This crate is an early API skeleton. The schema layer is deliberately permissive and keeps unknown fields so providers can evolve without breaking the proxy. The first production integrations should keep concrete OpenAI/Anthropic codecs in host code until the golden fixtures are ready to migrate here.
+This crate is an early API skeleton. The schema layer is deliberately permissive and keeps unknown fields so providers can evolve without breaking the proxy. The first production integrations should keep concrete OpenAI/Anthropic translators in host code until the golden fixtures are ready to migrate here.

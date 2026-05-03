@@ -34,13 +34,13 @@ pub struct AdapterStreamState {
     #[serde(default, skip_serializing_if = "Extensions::is_empty")]
     pub extensions: Extensions,
     #[serde(default)]
-    pub codec_state: DecodeState,
+    pub translator_state: DecodeState,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum AdapterStreamStep {
-    UseTargetCodec,
+    UseTargetTranslator,
     Events(Vec<UniversalEvent>),
 }
 
@@ -63,6 +63,6 @@ pub trait ProviderAdapter {
         _chunk: &Value,
         _state: &mut AdapterStreamState,
     ) -> Result<AdapterStreamStep> {
-        Ok(AdapterStreamStep::UseTargetCodec)
+        Ok(AdapterStreamStep::UseTargetTranslator)
     }
 }
