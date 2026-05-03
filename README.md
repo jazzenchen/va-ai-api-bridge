@@ -44,6 +44,17 @@ Provider adapters only transform package shapes:
 - `OpenAiResponsesTranslator`: `/v1/responses`
 - `AnthropicMessagesTranslator`: `/v1/messages`
 
+## Live Smoke Test
+
+For a real upstream smoke test against an existing VibeAround custom profile:
+
+```sh
+cargo run --example live_smoke -- --profile custom-vvjlcv80 --protocol openai-responses
+cargo run --example live_smoke -- --profile custom-vvjlcv80 --protocol anthropic
+```
+
+The example reads `~/.vibearound/profiles/<id>.json`, sends a tiny non-streaming request to the configured upstream, and prints the wire request, raw response, universal request, and universal response events. It is intentionally an example harness, not part of the library API.
+
 ## Status
 
 This crate is an early API skeleton. The schema layer is deliberately permissive and keeps unknown fields so providers can evolve without breaking the proxy. Built-in translators cover the common request, response, and stream packet shapes; provider-specific behavior should still live in provider adapters or host code.
