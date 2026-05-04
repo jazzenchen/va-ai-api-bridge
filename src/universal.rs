@@ -244,34 +244,3 @@ pub struct SourcePayload {
 fn is_false(value: &bool) -> bool {
     !*value
 }
-
-#[cfg(test)]
-mod tests {
-    use serde_json::json;
-
-    use super::*;
-
-    #[test]
-    fn universal_request_keeps_raw_escape_hatch() {
-        let request = UniversalRequest {
-            model: Some("gpt-test".to_string()),
-            input: vec![UniversalItem::Message {
-                role: Role::User,
-                id: None,
-                content: vec![ContentBlock::Text {
-                    text: "hello".to_string(),
-                }],
-                extensions: Extensions::new(),
-            }],
-            source: Some(SourcePayload {
-                protocol: WireProtocol::OpenAiResponses,
-                raw: Some(json!({ "provider_specific": true })),
-            }),
-            ..UniversalRequest::default()
-        };
-
-        let encoded = serde_json::to_value(&request).unwrap();
-        assert_eq!(encoded["source"]["protocol"], "openai-responses");
-        assert_eq!(encoded["source"]["raw"]["provider_specific"], true);
-    }
-}

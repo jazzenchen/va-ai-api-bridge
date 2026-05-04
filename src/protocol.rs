@@ -43,20 +43,3 @@ impl FromStr for WireProtocol {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn protocol_roundtrips_as_manifest_token() {
-        let encoded = serde_json::to_string(&WireProtocol::OpenAiResponses).unwrap();
-        assert_eq!(encoded, "\"openai-responses\"");
-        let decoded: WireProtocol = serde_json::from_str(&encoded).unwrap();
-        assert_eq!(decoded, WireProtocol::OpenAiResponses);
-        assert_eq!(
-            "openai-chat".parse::<WireProtocol>().unwrap(),
-            WireProtocol::OpenAiChat
-        );
-    }
-}

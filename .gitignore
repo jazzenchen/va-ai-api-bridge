@@ -1,1 +1,32 @@
-/target
+# Cargo build output
+/target/
+
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+*.local
+
+# Logs and temporary files
+*.log
+*.tmp
+*.temp
+*.bak
+*.orig
+
+# Coverage/profiling artifacts
+coverage/
+tarpaulin-report.html
+*.profraw
+*.profdata
+
+# Editor/IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS metadata
+.DS_Store
+Thumbs.db

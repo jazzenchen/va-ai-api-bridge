@@ -1,5 +1,7 @@
+mod anthropic;
 pub mod anthropic_messages;
 mod common;
+mod openai;
 pub mod openai_chat;
 pub mod openai_responses;
 

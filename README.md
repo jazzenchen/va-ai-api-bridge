@@ -7,12 +7,19 @@ Protocol translation primitives for AI API request and response shapes.
 ## Boundary
 
 ```text
-wire API payload
-  -> schema::{openai, anthropic} or serde_json::Value
-  -> WireTranslator
-  -> UniversalRequest / UniversalEvent
+agent wire request
+  -> source WireTranslator
+  -> UniversalRequest
   -> optional provider adapter
-  -> provider wire payload
+  -> target WireTranslator
+  -> upstream wire request
+
+upstream wire response / stream chunk
+  -> target WireTranslator
+  -> UniversalEvent
+  -> optional provider adapter
+  -> source WireTranslator
+  -> agent wire response / stream event
 ```
 
 The host application remains responsible for:
@@ -43,17 +50,6 @@ Provider adapters only transform package shapes:
 - `OpenAiChatTranslator`: `/v1/chat/completions`
 - `OpenAiResponsesTranslator`: `/v1/responses`
 - `AnthropicMessagesTranslator`: `/v1/messages`
-
-## Live Smoke Test
-
-For a real upstream smoke test against an existing VibeAround custom profile:
-
-```sh
-cargo run --example live_smoke -- --profile custom-vvjlcv80 --protocol openai-responses
-cargo run --example live_smoke -- --profile custom-vvjlcv80 --protocol anthropic
-```
-
-The example reads `~/.vibearound/profiles/<id>.json`, sends a tiny non-streaming request to the configured upstream, and prints the wire request, raw response, universal request, and universal response events. It is intentionally an example harness, not part of the library API.
 
 ## Status
 

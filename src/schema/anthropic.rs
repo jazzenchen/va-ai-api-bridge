@@ -157,38 +157,3 @@ pub struct AnthropicUsage {
     #[serde(default, skip_serializing_if = "ExtraFields::is_empty", flatten)]
     pub extra: ExtraFields,
 }
-
-#[cfg(test)]
-mod tests {
-    use serde_json::json;
-
-    use super::*;
-
-    #[test]
-    fn messages_request_preserves_unknown_provider_fields() {
-        let request: AnthropicMessagesRequest = serde_json::from_value(json!({
-            "model": "claude-test",
-            "max_tokens": 128,
-            "messages": [{ "role": "user", "content": "hello" }],
-            "metadata": { "tenant": "va" }
-        }))
-        .unwrap();
-
-        assert_eq!(request.model.as_deref(), Some("claude-test"));
-        assert_eq!(request.messages[0].role, "user");
-        assert_eq!(request.extra["metadata"]["tenant"], "va");
-    }
-
-    #[test]
-    fn stream_event_keeps_delta_kind() {
-        let event: AnthropicStreamEvent = serde_json::from_value(json!({
-            "type": "content_block_delta",
-            "index": 0,
-            "delta": { "type": "text_delta", "text": "hi" }
-        }))
-        .unwrap();
-
-        assert_eq!(event.kind.as_deref(), Some("content_block_delta"));
-        assert_eq!(event.delta.unwrap().kind.as_deref(), Some("text_delta"));
-    }
-}

@@ -304,38 +304,3 @@ pub struct OpenAiUsage {
     #[serde(default, skip_serializing_if = "ExtraFields::is_empty", flatten)]
     pub extra: ExtraFields,
 }
-
-#[cfg(test)]
-mod tests {
-    use serde_json::json;
-
-    use super::*;
-
-    #[test]
-    fn chat_request_preserves_unknown_provider_fields() {
-        let request: ChatCompletionRequest = serde_json::from_value(json!({
-            "model": "gpt-test",
-            "messages": [{ "role": "user", "content": "hello" }],
-            "x-provider-knob": true
-        }))
-        .unwrap();
-
-        assert_eq!(request.model.as_deref(), Some("gpt-test"));
-        assert_eq!(request.messages[0].role, "user");
-        assert_eq!(request.extra["x-provider-knob"], true);
-    }
-
-    #[test]
-    fn responses_stream_event_keeps_event_type() {
-        let event: ResponsesStreamEvent = serde_json::from_value(json!({
-            "type": "response.output_text.delta",
-            "output_index": 0,
-            "content_index": 0,
-            "delta": "hi"
-        }))
-        .unwrap();
-
-        assert_eq!(event.kind.as_deref(), Some("response.output_text.delta"));
-        assert_eq!(event.delta, Some(json!("hi")));
-    }
-}

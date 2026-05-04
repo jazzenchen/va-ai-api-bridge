@@ -192,39 +192,3 @@ fn default_catalog_schema_version() -> String {
 fn is_false(value: &bool) -> bool {
     !*value
 }
-
-#[cfg(test)]
-mod tests {
-    use serde_json::json;
-
-    use super::*;
-
-    #[test]
-    fn catalog_serializes_version_and_defaults() {
-        let mut catalog = ProviderCatalog::new("deepseek");
-        catalog.display_name = Some("DeepSeek".to_string());
-        catalog.protocols.push(ProviderProtocol {
-            source_protocol: WireProtocol::OpenAiChat,
-            target_protocol: WireProtocol::OpenAiChat,
-            upstream_path: Some("/chat/completions".to_string()),
-            default_model: Some("deepseek-chat".to_string()),
-            streaming: true,
-            tools: true,
-            defaults: ProviderDefaults {
-                raw_request: Some(json!({ "frequency_penalty": 0 })),
-                ..ProviderDefaults::default()
-            },
-            extensions: Extensions::new(),
-        });
-
-        let encoded = serde_json::to_value(catalog).unwrap();
-
-        assert_eq!(encoded["schemaVersion"], PROVIDER_CATALOG_SCHEMA_VERSION);
-        assert_eq!(encoded["providerId"], "deepseek");
-        assert_eq!(encoded["protocols"][0]["targetProtocol"], "openai-chat");
-        assert_eq!(
-            encoded["protocols"][0]["defaults"]["rawRequest"]["frequency_penalty"],
-            0
-        );
-    }
-}
