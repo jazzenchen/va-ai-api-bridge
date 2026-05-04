@@ -84,31 +84,50 @@ pub(super) fn encode(request: &UniversalRequest) -> Result<Value> {
     }
 
     let mut pending_tool_calls = Vec::new();
+    let mut pending_tool_reasoning_content = None;
     for item in &request.input {
         match item {
-            UniversalItem::Message { role, content, .. } => {
-                flush_tool_calls(&mut messages, &mut pending_tool_calls)?;
-                messages.push(message_value(
+            UniversalItem::Message {
+                role,
+                content,
+                extensions,
+                ..
+            } => {
+                flush_tool_calls(
+                    &mut messages,
+                    &mut pending_tool_calls,
+                    &mut pending_tool_reasoning_content,
+                )?;
+                let mut message = message_value(
                     openai::role_to_openai(*role),
                     openai::blocks_to_openai_content(content, "text", "image_url"),
                     None,
                     Vec::new(),
-                )?);
+                )?;
+                apply_chat_message_extensions(&mut message, extensions);
+                messages.push(message);
             }
             UniversalItem::ToolCall {
                 id,
                 name,
                 arguments,
-                ..
+                extensions,
             } => {
                 pending_tool_calls.push(chat_tool_call_value(id, name, arguments));
+                if pending_tool_reasoning_content.is_none() {
+                    pending_tool_reasoning_content = reasoning_content_extension(extensions);
+                }
             }
             UniversalItem::ToolResult {
                 tool_call_id,
                 content,
                 ..
             } => {
-                flush_tool_calls(&mut messages, &mut pending_tool_calls)?;
+                flush_tool_calls(
+                    &mut messages,
+                    &mut pending_tool_calls,
+                    &mut pending_tool_reasoning_content,
+                )?;
                 messages.push(message_value(
                     "tool",
                     openai::blocks_to_openai_content(content, "text", "image_url"),
@@ -117,13 +136,21 @@ pub(super) fn encode(request: &UniversalRequest) -> Result<Value> {
                 )?);
             }
             UniversalItem::Unknown { raw } => {
-                flush_tool_calls(&mut messages, &mut pending_tool_calls)?;
+                flush_tool_calls(
+                    &mut messages,
+                    &mut pending_tool_calls,
+                    &mut pending_tool_reasoning_content,
+                )?;
                 messages.push(raw.clone());
             }
             UniversalItem::Reasoning { .. } => {}
         }
     }
-    flush_tool_calls(&mut messages, &mut pending_tool_calls)?;
+    flush_tool_calls(
+        &mut messages,
+        &mut pending_tool_calls,
+        &mut pending_tool_reasoning_content,
+    )?;
 
     body.insert("messages".to_string(), Value::Array(messages));
     Ok(Value::Object(body))
@@ -132,6 +159,7 @@ pub(super) fn encode(request: &UniversalRequest) -> Result<Value> {
 fn decode_message(message: ChatMessage, request: &mut UniversalRequest) {
     let role = common::role_from_wire(&message.role);
     let blocks = openai::openai_content_to_blocks(message.content.as_ref());
+    let extensions = common::value_extensions(message.extra.clone());
 
     match role {
         Some(Role::System) => request.instructions.extend(blocks),
@@ -139,7 +167,7 @@ fn decode_message(message: ChatMessage, request: &mut UniversalRequest) {
             tool_call_id: message.tool_call_id.unwrap_or_default(),
             content: blocks,
             is_error: false,
-            extensions: common::empty_extensions(),
+            extensions,
         }),
         Some(role @ (Role::User | Role::Assistant)) => {
             if !blocks.is_empty() || message.tool_calls.is_empty() {
@@ -147,11 +175,14 @@ fn decode_message(message: ChatMessage, request: &mut UniversalRequest) {
                     role,
                     id: None,
                     content: blocks,
-                    extensions: common::empty_extensions(),
+                    extensions: extensions.clone(),
                 });
             }
             for tool_call in message.tool_calls {
-                request.input.push(chat_tool_call_to_item(tool_call));
+                request.input.push(chat_tool_call_to_item(
+                    tool_call,
+                    reasoning_content_extension(&extensions),
+                ));
             }
         }
         None => request.input.push(UniversalItem::Unknown {
@@ -160,8 +191,18 @@ fn decode_message(message: ChatMessage, request: &mut UniversalRequest) {
     }
 }
 
-fn chat_tool_call_to_item(tool_call: ChatToolCall) -> UniversalItem {
+fn chat_tool_call_to_item(
+    tool_call: ChatToolCall,
+    reasoning_content: Option<String>,
+) -> UniversalItem {
     let function = tool_call.function;
+    let mut extensions = common::empty_extensions();
+    if let Some(reasoning_content) = reasoning_content {
+        extensions.insert(
+            "reasoning_content".to_string(),
+            Value::String(reasoning_content),
+        );
+    }
     UniversalItem::ToolCall {
         id: tool_call.id.unwrap_or_default(),
         name: function
@@ -173,7 +214,7 @@ fn chat_tool_call_to_item(tool_call: ChatToolCall) -> UniversalItem {
                 .as_ref()
                 .and_then(|function| function.arguments.as_deref()),
         ),
-        extensions: common::empty_extensions(),
+        extensions,
     }
 }
 
@@ -215,15 +256,78 @@ fn chat_tool_call_value(id: &str, name: &str, arguments: &Value) -> Value {
     })
 }
 
-fn flush_tool_calls(messages: &mut Vec<Value>, pending_tool_calls: &mut Vec<Value>) -> Result<()> {
+fn flush_tool_calls(
+    messages: &mut Vec<Value>,
+    pending_tool_calls: &mut Vec<Value>,
+    pending_tool_reasoning_content: &mut Option<String>,
+) -> Result<()> {
     if pending_tool_calls.is_empty() {
         return Ok(());
     }
-    messages.push(message_value(
-        "assistant",
-        None,
-        None,
-        std::mem::take(pending_tool_calls),
-    )?);
+    let mut message = message_value("assistant", None, None, std::mem::take(pending_tool_calls))?;
+    if let Some(reasoning_content) = pending_tool_reasoning_content.take() {
+        if let Some(object) = message.as_object_mut() {
+            object.insert(
+                "reasoning_content".to_string(),
+                Value::String(reasoning_content),
+            );
+        }
+    }
+    messages.push(message);
     Ok(())
+}
+
+fn apply_chat_message_extensions(message: &mut Value, extensions: &crate::Extensions) {
+    let Some(reasoning_content) = reasoning_content_extension(extensions) else {
+        return;
+    };
+    if let Some(object) = message.as_object_mut() {
+        object.insert(
+            "reasoning_content".to_string(),
+            Value::String(reasoning_content),
+        );
+    }
+}
+
+fn reasoning_content_extension(extensions: &crate::Extensions) -> Option<String> {
+    extensions
+        .get("reasoning_content")
+        .and_then(Value::as_str)
+        .filter(|content| !content.is_empty())
+        .map(ToString::to_string)
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::{decode, encode};
+
+    #[test]
+    fn preserves_reasoning_content_on_assistant_tool_call_messages() {
+        let universal = decode(json!({
+            "model": "deepseek-v4-pro",
+            "messages": [{
+                "role": "assistant",
+                "content": null,
+                "reasoning_content": "I should inspect cwd.",
+                "tool_calls": [{
+                    "id": "call_123",
+                    "type": "function",
+                    "function": {
+                        "name": "exec_command",
+                        "arguments": "{\"cmd\":\"pwd\"}"
+                    }
+                }]
+            }]
+        }))
+        .expect("request decodes");
+        let encoded = encode(&universal).expect("request encodes");
+
+        assert_eq!(
+            encoded["messages"][0]["reasoning_content"],
+            "I should inspect cwd."
+        );
+        assert_eq!(encoded["messages"][0]["tool_calls"][0]["id"], "call_123");
+    }
 }

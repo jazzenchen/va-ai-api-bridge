@@ -1,4 +1,4 @@
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
 
 use crate::translator::{common, openai};
 use crate::{EncodeState, Result, UniversalEvent, WireEvent};
@@ -29,7 +29,15 @@ pub(super) fn encode(events: &[UniversalEvent], state: &mut EncodeState) -> Resu
                 name,
                 arguments_delta,
             } => {
-                let index = common::encode_state_index(state);
+                let index = tool_call_index(state, id);
+                let mut function = Map::new();
+                if let Some(name) = name {
+                    function.insert("name".to_string(), Value::String(name.clone()));
+                }
+                function.insert(
+                    "arguments".to_string(),
+                    Value::String(arguments_delta.clone()),
+                );
                 common::wire_event(json!({
                     "choices": [{
                         "index": 0,
@@ -38,15 +46,18 @@ pub(super) fn encode(events: &[UniversalEvent], state: &mut EncodeState) -> Resu
                                 "index": index,
                                 "id": id,
                                 "type": "function",
-                                "function": {
-                                    "name": name,
-                                    "arguments": arguments_delta
-                                }
+                                "function": Value::Object(function)
                             }]
                         }
                     }]
                 }))
             }
+            UniversalEvent::ReasoningDelta { index, text } => common::wire_event(json!({
+                "choices": [{
+                    "index": index,
+                    "delta": { "reasoning_content": text }
+                }]
+            })),
             UniversalEvent::MessageDone { finish_reason, .. } => common::wire_event(json!({
                 "choices": [{
                     "index": 0,
@@ -65,13 +76,25 @@ pub(super) fn encode(events: &[UniversalEvent], state: &mut EncodeState) -> Resu
                 }
             })),
             UniversalEvent::Unknown { raw, .. } => common::wire_event(raw.clone()),
-            UniversalEvent::ContentStart { .. }
-            | UniversalEvent::ReasoningDelta { .. }
-            | UniversalEvent::ContentDone { .. } => common::wire_event(json!({
+            UniversalEvent::ContentStart { .. } | UniversalEvent::ContentDone { .. } => {
+                common::wire_event(json!({
                 "choices": []
-            })),
+                }))
+            }
         })
         .collect())
+}
+
+fn tool_call_index(state: &mut EncodeState, id: &str) -> usize {
+    let key = format!("openaiChatToolCallIndex:{id}");
+    if let Some(index) = state.extensions.get(&key).and_then(Value::as_u64) {
+        return index as usize;
+    }
+    let index = common::encode_state_index(state);
+    state
+        .extensions
+        .insert(key, Value::Number((index as u64).into()));
+    index
 }
 
 fn finish_to_openai(reason: Option<crate::FinishReason>) -> Value {
@@ -93,5 +116,48 @@ fn usage_to_openai_value(usage: Option<&crate::Usage>) -> Value {
             "total_tokens": usage.total_tokens
         }),
         None => Value::Null,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{EncodeState, UniversalEvent};
+
+    use super::encode;
+
+    #[test]
+    fn uses_stable_tool_call_index_for_split_deltas() {
+        let mut state = EncodeState::default();
+        let first = encode(
+            &[UniversalEvent::ToolCallDelta {
+                id: "call_123".to_string(),
+                name: Some("exec_command".to_string()),
+                arguments_delta: String::new(),
+            }],
+            &mut state,
+        )
+        .expect("first delta encodes");
+        let second = encode(
+            &[UniversalEvent::ToolCallDelta {
+                id: "call_123".to_string(),
+                name: None,
+                arguments_delta: "{\"cmd\":\"ls\"}".to_string(),
+            }],
+            &mut state,
+        )
+        .expect("second delta encodes");
+
+        assert_eq!(
+            first[0].data["choices"][0]["delta"]["tool_calls"][0]["index"],
+            0
+        );
+        assert_eq!(
+            second[0].data["choices"][0]["delta"]["tool_calls"][0]["index"],
+            0
+        );
+        assert_eq!(
+            second[0].data["choices"][0]["delta"]["tool_calls"][0]["id"],
+            "call_123"
+        );
     }
 }

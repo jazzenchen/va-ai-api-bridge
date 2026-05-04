@@ -27,6 +27,23 @@ pub(super) fn decode(raw: serde_json::Value) -> Result<Vec<UniversalEvent>> {
                 common::push_block_events(&mut events, next_index, block);
                 next_index += 1;
             }
+            if let Some(reasoning_content) = message
+                .extra
+                .get("reasoning_content")
+                .and_then(serde_json::Value::as_str)
+                .filter(|content| !content.is_empty())
+            {
+                common::push_block_events(
+                    &mut events,
+                    next_index,
+                    ContentBlock::Reasoning {
+                        text: Some(reasoning_content.to_string()),
+                        encrypted: None,
+                        extensions: common::empty_extensions(),
+                    },
+                );
+                next_index += 1;
+            }
             for tool_call in message.tool_calls {
                 common::push_block_events(
                     &mut events,

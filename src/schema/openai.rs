@@ -107,6 +107,8 @@ pub struct OpenAiImageUrl {
 #[serde(rename_all = "snake_case")]
 pub struct ChatToolCall {
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub index: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,
     #[serde(default, rename = "type", skip_serializing_if = "Option::is_none")]
     pub kind: Option<String>,

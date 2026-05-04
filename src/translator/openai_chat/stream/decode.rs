@@ -1,6 +1,6 @@
 use serde_json::Value;
 
-use crate::schema::openai::ChatCompletionChunk;
+use crate::schema::openai::{ChatCompletionChunk, ChatToolCall};
 use crate::translator::{common, openai};
 use crate::{ApiProxyError, ContentBlock, DecodeState, Result, Role, UniversalEvent};
 
@@ -24,7 +24,7 @@ pub(super) fn decode_chunk(raw: Value, state: &mut DecodeState) -> Result<Vec<Un
                 .and_then(common::role_from_wire)
                 .unwrap_or(Role::Assistant);
             if delta.role.is_some() || delta.content.is_some() || !delta.tool_calls.is_empty() {
-                common::ensure_message_start(&mut events, state, message_id, role);
+                common::ensure_message_start(&mut events, state, message_id.clone(), role);
             }
 
             for block in openai::openai_content_to_blocks(delta.content.as_ref()) {
@@ -47,11 +47,31 @@ pub(super) fn decode_chunk(raw: Value, state: &mut DecodeState) -> Result<Vec<Un
                 }
             }
 
-            for tool_call in delta.tool_calls {
-                let id = tool_call
-                    .id
-                    .clone()
-                    .unwrap_or_else(|| format!("tool_call_{choice_index}"));
+            if let Some(reasoning_delta) = delta
+                .extra
+                .get("reasoning_content")
+                .and_then(Value::as_str)
+                .filter(|content| !content.is_empty())
+            {
+                common::ensure_message_start(&mut events, state, message_id.clone(), role);
+                common::ensure_content_start(
+                    &mut events,
+                    state,
+                    choice_index,
+                    ContentBlock::Reasoning {
+                        text: None,
+                        encrypted: None,
+                        extensions: common::empty_extensions(),
+                    },
+                );
+                events.push(UniversalEvent::ReasoningDelta {
+                    index: choice_index,
+                    text: reasoning_delta.to_string(),
+                });
+            }
+
+            for (fallback_index, tool_call) in delta.tool_calls.into_iter().enumerate() {
+                let id = stream_tool_call_id(state, choice_index, fallback_index, &tool_call);
                 let function = tool_call.function;
                 events.push(UniversalEvent::ToolCallDelta {
                     id,
@@ -86,4 +106,133 @@ pub(super) fn decode_chunk(raw: Value, state: &mut DecodeState) -> Result<Vec<Un
     }
 
     Ok(events)
+}
+
+fn stream_tool_call_id(
+    state: &mut DecodeState,
+    choice_index: usize,
+    fallback_index: usize,
+    tool_call: &ChatToolCall,
+) -> String {
+    let tool_index = tool_call.index.unwrap_or(fallback_index as u64);
+    let key = format!("openaiChatToolCallId:{choice_index}:{tool_index}");
+    if let Some(id) = tool_call.id.as_deref().filter(|id| !id.is_empty()) {
+        state.extensions.insert(key, Value::String(id.to_string()));
+        return id.to_string();
+    }
+    if let Some(id) = state.extensions.get(&key).and_then(Value::as_str) {
+        return id.to_string();
+    }
+    let fallback_id = format!("tool_call_{choice_index}_{tool_index}");
+    state
+        .extensions
+        .insert(key, Value::String(fallback_id.clone()));
+    fallback_id
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use crate::{DecodeState, UniversalEvent};
+
+    use super::decode_chunk;
+
+    #[test]
+    fn keeps_stream_tool_call_id_across_indexed_deltas() {
+        let mut state = DecodeState::default();
+        let first = decode_chunk(
+            json!({
+                "id": "chatcmpl_1",
+                "model": "deepseek-v4-pro",
+                "choices": [{
+                    "index": 0,
+                    "delta": {
+                        "role": "assistant",
+                        "tool_calls": [{
+                            "index": 0,
+                            "id": "call_123",
+                            "type": "function",
+                            "function": {
+                                "name": "exec_command",
+                                "arguments": ""
+                            }
+                        }]
+                    }
+                }]
+            }),
+            &mut state,
+        )
+        .expect("first chunk decodes");
+        let second = decode_chunk(
+            json!({
+                "id": "chatcmpl_1",
+                "model": "deepseek-v4-pro",
+                "choices": [{
+                    "index": 0,
+                    "delta": {
+                        "tool_calls": [{
+                            "index": 0,
+                            "function": {
+                                "arguments": "{\"cmd\":\"ls\"}"
+                            }
+                        }]
+                    }
+                }]
+            }),
+            &mut state,
+        )
+        .expect("second chunk decodes");
+
+        let first_tool_delta = first
+            .iter()
+            .find_map(|event| match event {
+                UniversalEvent::ToolCallDelta {
+                    id,
+                    name,
+                    arguments_delta,
+                } => Some((id.as_str(), name.as_deref(), arguments_delta.as_str())),
+                _ => None,
+            })
+            .expect("first tool delta");
+        let second_tool_delta = second
+            .iter()
+            .find_map(|event| match event {
+                UniversalEvent::ToolCallDelta {
+                    id,
+                    name,
+                    arguments_delta,
+                } => Some((id.as_str(), name.as_deref(), arguments_delta.as_str())),
+                _ => None,
+            })
+            .expect("second tool delta");
+
+        assert_eq!(first_tool_delta, ("call_123", Some("exec_command"), ""));
+        assert_eq!(second_tool_delta, ("call_123", None, "{\"cmd\":\"ls\"}"));
+    }
+
+    #[test]
+    fn emits_reasoning_content_deltas() {
+        let mut state = DecodeState::default();
+        let events = decode_chunk(
+            json!({
+                "id": "chatcmpl_1",
+                "model": "deepseek-v4-pro",
+                "choices": [{
+                    "index": 0,
+                    "delta": {
+                        "role": "assistant",
+                        "reasoning_content": "Need to inspect files."
+                    }
+                }]
+            }),
+            &mut state,
+        )
+        .expect("chunk decodes");
+
+        assert!(events.iter().any(|event| matches!(
+            event,
+            UniversalEvent::ReasoningDelta { text, .. } if text == "Need to inspect files."
+        )));
+    }
 }
