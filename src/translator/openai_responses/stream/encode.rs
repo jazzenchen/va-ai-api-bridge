@@ -38,10 +38,17 @@ pub(super) fn encode(events: &[UniversalEvent], state: &mut EncodeState) -> Resu
                 })));
             }
             UniversalEvent::ReasoningDelta { index, text } => {
+                if text.is_empty() {
+                    continue;
+                }
+                ensure_response_reasoning_started(state, &mut wire_events, *index);
+                let output_index = response_reasoning_output_index(state);
+                append_response_reasoning_text(state, text);
                 wire_events.push(common::wire_event(json!({
                     "type": "response.reasoning_text.delta",
-                    "output_index": 0,
+                    "output_index": output_index,
                     "content_index": index,
+                    "item_id": response_reasoning_id(state),
                     "delta": text
                 })))
             }
@@ -67,6 +74,7 @@ pub(super) fn encode(events: &[UniversalEvent], state: &mut EncodeState) -> Resu
                         .extensions
                         .insert("responseUsage".to_string(), json!(usage));
                 }
+                finish_response_reasoning(state, &mut wire_events);
                 finish_response_output(state, &mut wire_events);
                 finish_all_response_tools(state, &mut wire_events);
                 wire_events.push(common::wire_event(json!({
@@ -84,8 +92,11 @@ pub(super) fn encode(events: &[UniversalEvent], state: &mut EncodeState) -> Resu
             UniversalEvent::Unknown { raw, .. } => {
                 wire_events.push(common::wire_event(raw.clone()));
             }
-            UniversalEvent::ContentStart { index, block } => {
-                if let crate::ContentBlock::ToolCall { id, name, .. } = block {
+            UniversalEvent::ContentStart { index, block } => match block {
+                crate::ContentBlock::Reasoning { .. } => {
+                    ensure_response_reasoning_started(state, &mut wire_events, *index);
+                }
+                crate::ContentBlock::ToolCall { id, name, .. } => {
                     ensure_response_tool_started(
                         state,
                         &mut wire_events,
@@ -94,7 +105,8 @@ pub(super) fn encode(events: &[UniversalEvent], state: &mut EncodeState) -> Resu
                         Some(*index),
                     );
                 }
-            }
+                _ => {}
+            },
             UniversalEvent::ContentDone { index, final_block } => {
                 if let Some(crate::ContentBlock::ToolCall { id, .. }) = final_block {
                     finish_response_tool(state, &mut wire_events, id);
@@ -124,6 +136,67 @@ fn append_response_text(state: &mut EncodeState, text: &str) {
     state
         .extensions
         .insert("responseText".to_string(), Value::String(current));
+}
+
+fn append_response_reasoning_text(state: &mut EncodeState, text: &str) {
+    let mut current = state
+        .extensions
+        .get("responseReasoningText")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    current.push_str(text);
+    state
+        .extensions
+        .insert("responseReasoningText".to_string(), Value::String(current));
+}
+
+fn ensure_response_reasoning_started(
+    state: &mut EncodeState,
+    wire_events: &mut Vec<WireEvent>,
+    content_index: usize,
+) {
+    state.extensions.insert(
+        "responseReasoningContentIndex".to_string(),
+        Value::Number((content_index as u64).into()),
+    );
+    let previous = state
+        .extensions
+        .insert("responseReasoningStarted".to_string(), Value::Bool(true));
+    if matches!(previous, Some(Value::Bool(true))) {
+        return;
+    }
+    let output_index = assign_response_reasoning_output_index(state);
+    wire_events.push(common::wire_event(json!({
+        "type": "response.output_item.added",
+        "output_index": output_index,
+        "item": {
+            "id": response_reasoning_id(state),
+            "type": "reasoning",
+            "status": "in_progress",
+            "summary": []
+        }
+    })));
+}
+
+fn finish_response_reasoning(state: &mut EncodeState, wire_events: &mut Vec<WireEvent>) {
+    if !matches!(
+        state.extensions.get("responseReasoningStarted"),
+        Some(Value::Bool(true))
+    ) {
+        return;
+    }
+    let previous = state
+        .extensions
+        .insert("responseReasoningDone".to_string(), Value::Bool(true));
+    if matches!(previous, Some(Value::Bool(true))) {
+        return;
+    }
+    wire_events.push(common::wire_event(json!({
+        "type": "response.output_item.done",
+        "output_index": response_reasoning_output_index(state),
+        "item": response_reasoning_output_item(state)
+    })));
 }
 
 fn ensure_response_output_started(
@@ -234,6 +307,30 @@ fn response_message_output_index(state: &EncodeState) -> usize {
     state
         .extensions
         .get("responseOutputIndex")
+        .and_then(Value::as_u64)
+        .unwrap_or(0) as usize
+}
+
+fn assign_response_reasoning_output_index(state: &mut EncodeState) -> usize {
+    if let Some(index) = state
+        .extensions
+        .get("responseReasoningOutputIndex")
+        .and_then(Value::as_u64)
+    {
+        return index as usize;
+    }
+    let index = common::encode_state_index(state);
+    state.extensions.insert(
+        "responseReasoningOutputIndex".to_string(),
+        Value::Number((index as u64).into()),
+    );
+    index
+}
+
+fn response_reasoning_output_index(state: &EncodeState) -> usize {
+    state
+        .extensions
+        .get("responseReasoningOutputIndex")
         .and_then(Value::as_u64)
         .unwrap_or(0) as usize
 }
@@ -351,6 +448,28 @@ fn response_text(state: &EncodeState) -> String {
         .to_string()
 }
 
+fn response_reasoning_text(state: &EncodeState) -> String {
+    state
+        .extensions
+        .get("responseReasoningText")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string()
+}
+
+fn response_reasoning_id(state: &EncodeState) -> String {
+    let id = state
+        .extensions
+        .get("responseId")
+        .and_then(Value::as_str)
+        .unwrap_or("resp_va_proxy");
+    if id.starts_with("rs_") {
+        id.to_string()
+    } else {
+        format!("rs_{id}")
+    }
+}
+
 fn response_output_item(state: &EncodeState) -> Value {
     json!({
         "id": response_message_id(state),
@@ -361,6 +480,19 @@ fn response_output_item(state: &EncodeState) -> Value {
             "type": "output_text",
             "text": response_text(state),
             "annotations": []
+        }]
+    })
+}
+
+fn response_reasoning_output_item(state: &EncodeState) -> Value {
+    json!({
+        "id": response_reasoning_id(state),
+        "type": "reasoning",
+        "status": "completed",
+        "summary": [],
+        "content": [{
+            "type": "reasoning_text",
+            "text": response_reasoning_text(state)
         }]
     })
 }
@@ -422,20 +554,36 @@ fn response_shell(state: &EncodeState, status: &str, usage: Option<&crate::Usage
 fn response_output_items(state: &EncodeState) -> Vec<Value> {
     let mut output = Vec::new();
     if matches!(
+        state.extensions.get("responseReasoningDone"),
+        Some(Value::Bool(true))
+    ) {
+        output.push((
+            response_reasoning_output_index(state),
+            response_reasoning_output_item(state),
+        ));
+    }
+    if matches!(
         state.extensions.get("responseOutputDone"),
         Some(Value::Bool(true))
     ) {
-        output.push(response_output_item(state));
+        output.push((
+            response_message_output_index(state),
+            response_output_item(state),
+        ));
     }
     for id in response_tool_ids(state) {
         if matches!(
             state.extensions.get(&response_tool_done_key(&id)),
             Some(Value::Bool(true))
         ) {
-            output.push(response_tool_output_item(state, &id));
+            output.push((
+                response_tool_output_index(state, &id),
+                response_tool_output_item(state, &id),
+            ));
         }
     }
-    output
+    output.sort_by_key(|(output_index, _)| *output_index);
+    output.into_iter().map(|(_, item)| item).collect()
 }
 
 fn assign_response_tool_output_index(state: &mut EncodeState, id: &str) -> usize {
@@ -558,5 +706,74 @@ fn usage_to_openai_value(usage: Option<&crate::Usage>) -> Value {
             "total_tokens": usage.total_tokens
         }),
         None => Value::Null,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::translator::common;
+    use crate::{EncodeState, UniversalEvent};
+
+    use super::encode;
+
+    #[test]
+    fn opens_reasoning_item_before_reasoning_delta() {
+        let mut state = EncodeState::default();
+        let events = encode(
+            &[
+                UniversalEvent::ResponseStart {
+                    id: Some("resp_1".to_string()),
+                    model: Some("deepseek-v4-pro".to_string()),
+                    extensions: common::empty_extensions(),
+                },
+                UniversalEvent::ReasoningDelta {
+                    index: 0,
+                    text: "Need to think.".to_string(),
+                },
+                UniversalEvent::TextDelta {
+                    index: 0,
+                    text: "OK".to_string(),
+                },
+                UniversalEvent::ResponseDone {
+                    usage: None,
+                    extensions: common::empty_extensions(),
+                },
+            ],
+            &mut state,
+        )
+        .expect("events encode");
+
+        let reasoning_added_index = events
+            .iter()
+            .position(|event| {
+                event.data["type"] == "response.output_item.added"
+                    && event.data["item"]["type"] == "reasoning"
+            })
+            .expect("reasoning item added");
+        let reasoning_delta_index = events
+            .iter()
+            .position(|event| event.data["type"] == "response.reasoning_text.delta")
+            .expect("reasoning delta");
+
+        assert!(reasoning_added_index < reasoning_delta_index);
+        assert_eq!(
+            events[reasoning_delta_index].data["item_id"],
+            events[reasoning_added_index].data["item"]["id"]
+        );
+
+        let completed = events
+            .iter()
+            .find(|event| event.data["type"] == "response.completed")
+            .expect("response completed");
+        assert_eq!(completed.data["response"]["output"][0]["type"], "reasoning");
+        assert_eq!(
+            completed.data["response"]["output"][0]["content"][0]["text"],
+            "Need to think."
+        );
+        assert_eq!(completed.data["response"]["output"][1]["type"], "message");
+        assert_eq!(
+            completed.data["response"]["output"][1]["content"][0]["text"],
+            "OK"
+        );
     }
 }
