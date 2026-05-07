@@ -27,6 +27,7 @@ pub(super) fn encode(events: &[UniversalEvent], state: &mut EncodeState) -> Resu
             }
             UniversalEvent::ContentStart { index, block } => {
                 reserve_index(state, *index);
+                remember_content_started(state, *index);
                 match block {
                     crate::ContentBlock::ToolCall { id, name, .. } => {
                         remember_tool_id(state, id);
@@ -94,6 +95,7 @@ pub(super) fn encode(events: &[UniversalEvent], state: &mut EncodeState) -> Resu
                 }
             }
             UniversalEvent::ContentDone { index, .. } => {
+                remember_content_closed(state, *index);
                 if let Some(id) = tool_id_for_index(state, *index) {
                     state
                         .extensions
@@ -112,6 +114,7 @@ pub(super) fn encode(events: &[UniversalEvent], state: &mut EncodeState) -> Resu
                 remember_message_done(state, *finish_reason, usage);
             }
             UniversalEvent::ResponseDone { usage, .. } => {
+                close_open_content_blocks(state, &mut wire_events);
                 close_open_tool_blocks(state, &mut wire_events);
                 if !message_delta_sent(state) {
                     let usage = response_usage(usage, state);
@@ -189,6 +192,7 @@ fn ensure_tool_block_started(
         .extensions
         .insert(tool_started_key(id), Value::Bool(true));
     if !matches!(previous, Some(Value::Bool(true))) {
+        remember_content_started(state, index);
         wire_events.push(common::wire_event(json!({
             "type": "content_block_start",
             "index": index,
@@ -201,6 +205,24 @@ fn ensure_tool_block_started(
         })));
     }
     index
+}
+
+fn close_open_content_blocks(state: &mut EncodeState, wire_events: &mut Vec<WireEvent>) {
+    for index in content_block_indexes(state) {
+        if content_block_closed(state, index) {
+            continue;
+        }
+        remember_content_closed(state, index);
+        if let Some(id) = tool_id_for_index(state, index) {
+            state
+                .extensions
+                .insert(tool_closed_key(&id), Value::Bool(true));
+        }
+        wire_events.push(common::wire_event(json!({
+            "type": "content_block_stop",
+            "index": index
+        })));
+    }
 }
 
 fn close_open_tool_blocks(state: &mut EncodeState, wire_events: &mut Vec<WireEvent>) {
@@ -216,6 +238,56 @@ fn close_open_tool_blocks(state: &mut EncodeState, wire_events: &mut Vec<WireEve
             "index": tool_block_index(state, &id)
         })));
     }
+}
+
+fn remember_content_started(state: &mut EncodeState, index: usize) {
+    let mut indexes = content_block_indexes(state);
+    if indexes.contains(&index) {
+        return;
+    }
+    indexes.push(index);
+    indexes.sort_unstable();
+    state.extensions.insert(
+        "anthropicContentBlockIndexes".to_string(),
+        Value::Array(
+            indexes
+                .into_iter()
+                .map(|index| Value::Number((index as u64).into()))
+                .collect(),
+        ),
+    );
+}
+
+fn content_block_indexes(state: &EncodeState) -> Vec<usize> {
+    state
+        .extensions
+        .get("anthropicContentBlockIndexes")
+        .and_then(Value::as_array)
+        .map(|indexes| {
+            indexes
+                .iter()
+                .filter_map(Value::as_u64)
+                .map(|index| index as usize)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn remember_content_closed(state: &mut EncodeState, index: usize) {
+    state
+        .extensions
+        .insert(content_closed_key(index), Value::Bool(true));
+}
+
+fn content_block_closed(state: &EncodeState, index: usize) -> bool {
+    matches!(
+        state.extensions.get(&content_closed_key(index)),
+        Some(Value::Bool(true))
+    )
+}
+
+fn content_closed_key(index: usize) -> String {
+    format!("anthropicContentBlockClosed:{index}")
 }
 
 fn has_tool_blocks(state: &EncodeState) -> bool {
@@ -458,5 +530,51 @@ mod tests {
             message_delta.data["usage"],
             json!({ "input_tokens": 0, "output_tokens": 0 })
         );
+    }
+
+    #[test]
+    fn response_done_closes_open_text_block_before_message_delta() {
+        let events = encode(
+            &[
+                UniversalEvent::ResponseStart {
+                    id: Some("msg_1".to_string()),
+                    model: Some("qwen3-coder-next".to_string()),
+                    extensions: Default::default(),
+                },
+                UniversalEvent::ContentStart {
+                    index: 0,
+                    block: ContentBlock::Text {
+                        text: String::new(),
+                    },
+                },
+                UniversalEvent::TextDelta {
+                    index: 0,
+                    text: "OK".to_string(),
+                },
+                UniversalEvent::MessageDone {
+                    finish_reason: Some(crate::FinishReason::Stop),
+                    usage: None,
+                    extensions: Default::default(),
+                },
+                UniversalEvent::ResponseDone {
+                    usage: None,
+                    extensions: Default::default(),
+                },
+            ],
+            &mut EncodeState::default(),
+        )
+        .expect("events encode");
+
+        let stop_index = events
+            .iter()
+            .position(|event| event.data["type"] == "content_block_stop")
+            .expect("content_block_stop");
+        let delta_index = events
+            .iter()
+            .position(|event| event.data["type"] == "message_delta")
+            .expect("message_delta");
+
+        assert!(stop_index < delta_index);
+        assert_eq!(events[stop_index].data["index"], 0);
     }
 }
