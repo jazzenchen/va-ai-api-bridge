@@ -55,7 +55,11 @@ pub(crate) fn openai_tool_from_value(value: &Value) -> Option<UniversalTool> {
         .get("function")
         .and_then(Value::as_object)
         .unwrap_or(object);
-    let name = function.get("name").and_then(Value::as_str)?;
+    let name = function
+        .get("name")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|name| !name.is_empty())?;
     Some(UniversalTool {
         name: name.to_string(),
         description: function
@@ -79,9 +83,10 @@ pub(crate) fn tool_to_openai_chat(tool: &UniversalTool) -> Value {
             Value::String(description.clone()),
         );
     }
-    if let Some(input_schema) = &tool.input_schema {
-        function.insert("parameters".to_string(), input_schema.clone());
-    }
+    function.insert(
+        "parameters".to_string(),
+        sanitize_openai_parameters(tool.input_schema.as_ref()),
+    );
     json!({
         "type": "function",
         "function": function
@@ -98,8 +103,81 @@ pub(crate) fn tool_to_openai_responses(tool: &UniversalTool) -> Value {
             Value::String(description.clone()),
         );
     }
-    if let Some(input_schema) = &tool.input_schema {
-        object.insert("parameters".to_string(), input_schema.clone());
-    }
+    object.insert(
+        "parameters".to_string(),
+        sanitize_openai_parameters(tool.input_schema.as_ref()),
+    );
     Value::Object(object)
+}
+
+fn sanitize_openai_parameters(input_schema: Option<&Value>) -> Value {
+    let Some(Value::Object(object)) = input_schema else {
+        return empty_object_schema();
+    };
+    if object.is_empty() {
+        return empty_object_schema();
+    }
+    Value::Object(object.clone())
+}
+
+fn empty_object_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {}
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn skips_tools_with_blank_names() {
+        assert!(openai_tool_from_value(&json!({
+            "type": "function",
+            "name": " ",
+            "parameters": { "type": "object" }
+        }))
+        .is_none());
+    }
+
+    #[test]
+    fn chat_tools_always_include_non_empty_parameters() {
+        let tool = UniversalTool {
+            name: "list_files".to_string(),
+            description: None,
+            input_schema: None,
+            extensions: Default::default(),
+        };
+
+        let encoded = tool_to_openai_chat(&tool);
+
+        assert_eq!(
+            encoded["function"]["parameters"],
+            json!({
+                "type": "object",
+                "properties": {}
+            })
+        );
+    }
+
+    #[test]
+    fn responses_tools_normalize_empty_parameter_objects() {
+        let tool = UniversalTool {
+            name: "list_files".to_string(),
+            description: None,
+            input_schema: Some(json!({})),
+            extensions: Default::default(),
+        };
+
+        let encoded = tool_to_openai_responses(&tool);
+
+        assert_eq!(
+            encoded["parameters"],
+            json!({
+                "type": "object",
+                "properties": {}
+            })
+        );
+    }
 }

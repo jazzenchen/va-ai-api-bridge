@@ -12,8 +12,16 @@ pub(super) fn encode(events: &[UniversalEvent], state: &mut EncodeState) -> Resu
                     "type": "message_start",
                     "message": {
                         "id": id,
+                        "type": "message",
                         "model": model,
-                        "role": "assistant"
+                        "role": "assistant",
+                        "content": [],
+                        "stop_reason": Value::Null,
+                        "stop_sequence": Value::Null,
+                        "usage": {
+                            "input_tokens": 0,
+                            "output_tokens": 0
+                        }
                     }
                 })))
             }
@@ -113,7 +121,8 @@ pub(super) fn encode(events: &[UniversalEvent], state: &mut EncodeState) -> Resu
                             "stop_reason": finish_to_anthropic(normalize_finish_reason(
                                 pending_finish_reason(state),
                                 state,
-                            ))
+                            )),
+                            "stop_sequence": Value::Null
                         },
                         "usage": usage
                     })));
@@ -253,7 +262,7 @@ fn pending_usage(state: &EncodeState) -> Value {
         .extensions
         .get("anthropicPendingUsage")
         .cloned()
-        .unwrap_or(Value::Null)
+        .unwrap_or_else(zero_usage)
 }
 
 fn response_usage(usage: &Option<Usage>, state: &EncodeState) -> Value {
@@ -267,6 +276,13 @@ fn usage_to_anthropic_value(usage: &Usage) -> Value {
     json!({
         "input_tokens": usage.input_tokens.unwrap_or(0),
         "output_tokens": usage.output_tokens.unwrap_or(0)
+    })
+}
+
+fn zero_usage() -> Value {
+    json!({
+        "input_tokens": 0,
+        "output_tokens": 0
     })
 }
 
@@ -362,4 +378,85 @@ fn tool_closed_key(id: &str) -> String {
 
 fn tool_name_key(id: &str) -> String {
     format!("anthropicToolName:{id}")
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{ContentBlock, EncodeState, UniversalEvent};
+
+    use super::*;
+
+    #[test]
+    fn message_start_uses_complete_anthropic_shape() {
+        let events = encode(
+            &[UniversalEvent::ResponseStart {
+                id: Some("msg_1".to_string()),
+                model: Some("qwen3-coder-next".to_string()),
+                extensions: Default::default(),
+            }],
+            &mut EncodeState::default(),
+        )
+        .expect("events encode");
+
+        let data = &events[0].data;
+        assert_eq!(data["type"], "message_start");
+        assert_eq!(data["message"]["type"], "message");
+        assert_eq!(data["message"]["role"], "assistant");
+        assert_eq!(data["message"]["content"], json!([]));
+        assert_eq!(data["message"]["stop_reason"], Value::Null);
+        assert_eq!(data["message"]["stop_sequence"], Value::Null);
+        assert_eq!(
+            data["message"]["usage"],
+            json!({ "input_tokens": 0, "output_tokens": 0 })
+        );
+    }
+
+    #[test]
+    fn message_delta_uses_object_usage_when_upstream_omits_usage() {
+        let events = encode(
+            &[
+                UniversalEvent::ResponseStart {
+                    id: Some("msg_1".to_string()),
+                    model: Some("qwen3-coder-next".to_string()),
+                    extensions: Default::default(),
+                },
+                UniversalEvent::ContentStart {
+                    index: 0,
+                    block: ContentBlock::Text {
+                        text: String::new(),
+                    },
+                },
+                UniversalEvent::TextDelta {
+                    index: 0,
+                    text: "OK".to_string(),
+                },
+                UniversalEvent::ContentDone {
+                    index: 0,
+                    final_block: None,
+                },
+                UniversalEvent::MessageDone {
+                    finish_reason: Some(crate::FinishReason::Stop),
+                    usage: None,
+                    extensions: Default::default(),
+                },
+                UniversalEvent::ResponseDone {
+                    usage: None,
+                    extensions: Default::default(),
+                },
+            ],
+            &mut EncodeState::default(),
+        )
+        .expect("events encode");
+
+        let message_delta = events
+            .iter()
+            .find(|event| event.data["type"] == "message_delta")
+            .expect("message_delta");
+        assert_eq!(message_delta.data["delta"]["stop_reason"], "end_turn");
+        assert_eq!(message_delta.data["delta"]["stop_sequence"], Value::Null);
+        assert_eq!(
+            message_delta.data["usage"],
+            json!({ "input_tokens": 0, "output_tokens": 0 })
+        );
+    }
 }
