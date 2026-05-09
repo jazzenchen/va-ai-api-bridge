@@ -12,13 +12,22 @@ pub(super) fn encode(events: &[UniversalEvent], state: &mut EncodeState) -> Resu
                     "type": "message_start",
                     "message": {
                         "id": id,
+                        "type": "message",
                         "model": model,
-                        "role": "assistant"
+                        "role": "assistant",
+                        "content": [],
+                        "stop_reason": Value::Null,
+                        "stop_sequence": Value::Null,
+                        "usage": {
+                            "input_tokens": 0,
+                            "output_tokens": 0
+                        }
                     }
                 })))
             }
             UniversalEvent::ContentStart { index, block } => {
                 reserve_index(state, *index);
+                remember_content_started(state, *index);
                 match block {
                     crate::ContentBlock::ToolCall { id, name, .. } => {
                         remember_tool_id(state, id);
@@ -86,6 +95,7 @@ pub(super) fn encode(events: &[UniversalEvent], state: &mut EncodeState) -> Resu
                 }
             }
             UniversalEvent::ContentDone { index, .. } => {
+                remember_content_closed(state, *index);
                 if let Some(id) = tool_id_for_index(state, *index) {
                     state
                         .extensions
@@ -104,6 +114,7 @@ pub(super) fn encode(events: &[UniversalEvent], state: &mut EncodeState) -> Resu
                 remember_message_done(state, *finish_reason, usage);
             }
             UniversalEvent::ResponseDone { usage, .. } => {
+                close_open_content_blocks(state, &mut wire_events);
                 close_open_tool_blocks(state, &mut wire_events);
                 if !message_delta_sent(state) {
                     let usage = response_usage(usage, state);
@@ -113,7 +124,8 @@ pub(super) fn encode(events: &[UniversalEvent], state: &mut EncodeState) -> Resu
                             "stop_reason": finish_to_anthropic(normalize_finish_reason(
                                 pending_finish_reason(state),
                                 state,
-                            ))
+                            )),
+                            "stop_sequence": Value::Null
                         },
                         "usage": usage
                     })));
@@ -180,6 +192,7 @@ fn ensure_tool_block_started(
         .extensions
         .insert(tool_started_key(id), Value::Bool(true));
     if !matches!(previous, Some(Value::Bool(true))) {
+        remember_content_started(state, index);
         wire_events.push(common::wire_event(json!({
             "type": "content_block_start",
             "index": index,
@@ -192,6 +205,24 @@ fn ensure_tool_block_started(
         })));
     }
     index
+}
+
+fn close_open_content_blocks(state: &mut EncodeState, wire_events: &mut Vec<WireEvent>) {
+    for index in content_block_indexes(state) {
+        if content_block_closed(state, index) {
+            continue;
+        }
+        remember_content_closed(state, index);
+        if let Some(id) = tool_id_for_index(state, index) {
+            state
+                .extensions
+                .insert(tool_closed_key(&id), Value::Bool(true));
+        }
+        wire_events.push(common::wire_event(json!({
+            "type": "content_block_stop",
+            "index": index
+        })));
+    }
 }
 
 fn close_open_tool_blocks(state: &mut EncodeState, wire_events: &mut Vec<WireEvent>) {
@@ -207,6 +238,56 @@ fn close_open_tool_blocks(state: &mut EncodeState, wire_events: &mut Vec<WireEve
             "index": tool_block_index(state, &id)
         })));
     }
+}
+
+fn remember_content_started(state: &mut EncodeState, index: usize) {
+    let mut indexes = content_block_indexes(state);
+    if indexes.contains(&index) {
+        return;
+    }
+    indexes.push(index);
+    indexes.sort_unstable();
+    state.extensions.insert(
+        "anthropicContentBlockIndexes".to_string(),
+        Value::Array(
+            indexes
+                .into_iter()
+                .map(|index| Value::Number((index as u64).into()))
+                .collect(),
+        ),
+    );
+}
+
+fn content_block_indexes(state: &EncodeState) -> Vec<usize> {
+    state
+        .extensions
+        .get("anthropicContentBlockIndexes")
+        .and_then(Value::as_array)
+        .map(|indexes| {
+            indexes
+                .iter()
+                .filter_map(Value::as_u64)
+                .map(|index| index as usize)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn remember_content_closed(state: &mut EncodeState, index: usize) {
+    state
+        .extensions
+        .insert(content_closed_key(index), Value::Bool(true));
+}
+
+fn content_block_closed(state: &EncodeState, index: usize) -> bool {
+    matches!(
+        state.extensions.get(&content_closed_key(index)),
+        Some(Value::Bool(true))
+    )
+}
+
+fn content_closed_key(index: usize) -> String {
+    format!("anthropicContentBlockClosed:{index}")
 }
 
 fn has_tool_blocks(state: &EncodeState) -> bool {
@@ -253,7 +334,7 @@ fn pending_usage(state: &EncodeState) -> Value {
         .extensions
         .get("anthropicPendingUsage")
         .cloned()
-        .unwrap_or(Value::Null)
+        .unwrap_or_else(zero_usage)
 }
 
 fn response_usage(usage: &Option<Usage>, state: &EncodeState) -> Value {
@@ -267,6 +348,13 @@ fn usage_to_anthropic_value(usage: &Usage) -> Value {
     json!({
         "input_tokens": usage.input_tokens.unwrap_or(0),
         "output_tokens": usage.output_tokens.unwrap_or(0)
+    })
+}
+
+fn zero_usage() -> Value {
+    json!({
+        "input_tokens": 0,
+        "output_tokens": 0
     })
 }
 
@@ -362,4 +450,131 @@ fn tool_closed_key(id: &str) -> String {
 
 fn tool_name_key(id: &str) -> String {
     format!("anthropicToolName:{id}")
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{ContentBlock, EncodeState, UniversalEvent};
+
+    use super::*;
+
+    #[test]
+    fn message_start_uses_complete_anthropic_shape() {
+        let events = encode(
+            &[UniversalEvent::ResponseStart {
+                id: Some("msg_1".to_string()),
+                model: Some("qwen3-coder-next".to_string()),
+                extensions: Default::default(),
+            }],
+            &mut EncodeState::default(),
+        )
+        .expect("events encode");
+
+        let data = &events[0].data;
+        assert_eq!(data["type"], "message_start");
+        assert_eq!(data["message"]["type"], "message");
+        assert_eq!(data["message"]["role"], "assistant");
+        assert_eq!(data["message"]["content"], json!([]));
+        assert_eq!(data["message"]["stop_reason"], Value::Null);
+        assert_eq!(data["message"]["stop_sequence"], Value::Null);
+        assert_eq!(
+            data["message"]["usage"],
+            json!({ "input_tokens": 0, "output_tokens": 0 })
+        );
+    }
+
+    #[test]
+    fn message_delta_uses_object_usage_when_upstream_omits_usage() {
+        let events = encode(
+            &[
+                UniversalEvent::ResponseStart {
+                    id: Some("msg_1".to_string()),
+                    model: Some("qwen3-coder-next".to_string()),
+                    extensions: Default::default(),
+                },
+                UniversalEvent::ContentStart {
+                    index: 0,
+                    block: ContentBlock::Text {
+                        text: String::new(),
+                    },
+                },
+                UniversalEvent::TextDelta {
+                    index: 0,
+                    text: "OK".to_string(),
+                },
+                UniversalEvent::ContentDone {
+                    index: 0,
+                    final_block: None,
+                },
+                UniversalEvent::MessageDone {
+                    finish_reason: Some(crate::FinishReason::Stop),
+                    usage: None,
+                    extensions: Default::default(),
+                },
+                UniversalEvent::ResponseDone {
+                    usage: None,
+                    extensions: Default::default(),
+                },
+            ],
+            &mut EncodeState::default(),
+        )
+        .expect("events encode");
+
+        let message_delta = events
+            .iter()
+            .find(|event| event.data["type"] == "message_delta")
+            .expect("message_delta");
+        assert_eq!(message_delta.data["delta"]["stop_reason"], "end_turn");
+        assert_eq!(message_delta.data["delta"]["stop_sequence"], Value::Null);
+        assert_eq!(
+            message_delta.data["usage"],
+            json!({ "input_tokens": 0, "output_tokens": 0 })
+        );
+    }
+
+    #[test]
+    fn response_done_closes_open_text_block_before_message_delta() {
+        let events = encode(
+            &[
+                UniversalEvent::ResponseStart {
+                    id: Some("msg_1".to_string()),
+                    model: Some("qwen3-coder-next".to_string()),
+                    extensions: Default::default(),
+                },
+                UniversalEvent::ContentStart {
+                    index: 0,
+                    block: ContentBlock::Text {
+                        text: String::new(),
+                    },
+                },
+                UniversalEvent::TextDelta {
+                    index: 0,
+                    text: "OK".to_string(),
+                },
+                UniversalEvent::MessageDone {
+                    finish_reason: Some(crate::FinishReason::Stop),
+                    usage: None,
+                    extensions: Default::default(),
+                },
+                UniversalEvent::ResponseDone {
+                    usage: None,
+                    extensions: Default::default(),
+                },
+            ],
+            &mut EncodeState::default(),
+        )
+        .expect("events encode");
+
+        let stop_index = events
+            .iter()
+            .position(|event| event.data["type"] == "content_block_stop")
+            .expect("content_block_stop");
+        let delta_index = events
+            .iter()
+            .position(|event| event.data["type"] == "message_delta")
+            .expect("message_delta");
+
+        assert!(stop_index < delta_index);
+        assert_eq!(events[stop_index].data["index"], 0);
+    }
 }
