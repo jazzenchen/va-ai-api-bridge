@@ -96,11 +96,12 @@ pub(super) fn encode(request: &UniversalRequest) -> Result<Value> {
                 extensions,
                 ..
             } => {
-                if is_empty_assistant_message(*role, content, extensions) {
+                let chat_content = chat_compatible_content_blocks(content);
+                if is_empty_assistant_message(*role, &chat_content, extensions) {
                     continue;
                 }
                 if *role == Role::Assistant && !pending_tool_calls.is_empty() {
-                    pending_tool_content.extend(content.iter().cloned());
+                    pending_tool_content.extend(chat_content);
                     if pending_tool_reasoning_content.is_none() {
                         pending_tool_reasoning_content = reasoning_content_extension(extensions);
                     }
@@ -114,7 +115,7 @@ pub(super) fn encode(request: &UniversalRequest) -> Result<Value> {
                 )?;
                 let mut message = message_value(
                     openai::role_to_openai(*role),
-                    openai::blocks_to_openai_content(content, "text", "image_url"),
+                    openai::blocks_to_openai_content(&chat_content, "text", "image_url"),
                     None,
                     Vec::new(),
                 )?;
@@ -157,7 +158,9 @@ pub(super) fn encode(request: &UniversalRequest) -> Result<Value> {
                     &mut pending_tool_content,
                     &mut pending_tool_reasoning_content,
                 )?;
-                messages.push(raw.clone());
+                if let Some(message) = unknown_chat_message(raw) {
+                    messages.push(message);
+                }
             }
             UniversalItem::Reasoning { .. } => {}
         }
@@ -194,6 +197,44 @@ fn is_empty_message_content_block(block: &ContentBlock) -> bool {
         }
         _ => false,
     }
+}
+
+fn chat_compatible_content_blocks(content: &[ContentBlock]) -> Vec<ContentBlock> {
+    content
+        .iter()
+        .filter_map(chat_compatible_content_block)
+        .collect()
+}
+
+fn chat_compatible_content_block(block: &ContentBlock) -> Option<ContentBlock> {
+    match block {
+        ContentBlock::Text { .. } | ContentBlock::Image { .. } | ContentBlock::File { .. } => {
+            Some(block.clone())
+        }
+        ContentBlock::Unknown { raw } => {
+            raw.as_str()
+                .filter(|text| !text.trim().is_empty())
+                .map(|text| ContentBlock::Text {
+                    text: text.to_string(),
+                })
+        }
+        ContentBlock::ToolCall { .. }
+        | ContentBlock::ToolResult { .. }
+        | ContentBlock::Reasoning { .. } => None,
+    }
+}
+
+fn unknown_chat_message(raw: &Value) -> Option<Value> {
+    let object = raw.as_object()?;
+    if object.contains_key("type") {
+        return None;
+    }
+    let role = object.get("role").and_then(Value::as_str)?;
+    matches!(
+        role,
+        "system" | "developer" | "user" | "assistant" | "tool" | "function"
+    )
+    .then(|| raw.clone())
 }
 
 fn decode_message(message: ChatMessage, request: &mut UniversalRequest) {
@@ -477,7 +518,7 @@ mod tests {
     }
 
     #[test]
-    fn preserves_encrypted_reasoning_assistant_message() {
+    fn drops_encrypted_reasoning_assistant_message_for_chat_compatibility() {
         let request = UniversalRequest {
             model: Some("chat-model".to_string()),
             input: vec![UniversalItem::Message {
@@ -496,8 +537,72 @@ mod tests {
         let encoded = encode(&request).expect("request encodes");
 
         let messages = encoded["messages"].as_array().unwrap();
+        assert!(messages.is_empty());
+    }
+
+    #[test]
+    fn filters_non_chat_content_parts_from_messages() {
+        let request = UniversalRequest {
+            model: Some("chat-model".to_string()),
+            input: vec![UniversalItem::Message {
+                role: Role::Assistant,
+                id: None,
+                content: vec![
+                    ContentBlock::Text {
+                        text: "Visible text.".to_string(),
+                    },
+                    ContentBlock::Reasoning {
+                        text: Some("hidden reasoning".to_string()),
+                        encrypted: None,
+                        extensions: Default::default(),
+                    },
+                    ContentBlock::Unknown {
+                        raw: json!({ "type": "reasoning_text", "text": "raw reasoning" }),
+                    },
+                ],
+                extensions: Default::default(),
+            }],
+            ..UniversalRequest::default()
+        };
+
+        let encoded = encode(&request).expect("request encodes");
+
+        let messages = encoded["messages"].as_array().unwrap();
         assert_eq!(messages.len(), 1);
         assert_eq!(messages[0]["role"], "assistant");
-        assert_eq!(messages[0]["content"][0]["type"], "unknown");
+        assert_eq!(messages[0]["content"], "Visible text.");
+    }
+
+    #[test]
+    fn drops_unknown_responses_items_in_chat_encoding() {
+        let request = UniversalRequest {
+            model: Some("chat-model".to_string()),
+            input: vec![
+                UniversalItem::Unknown {
+                    raw: json!({
+                        "type": "reasoning",
+                        "id": "rs_123",
+                        "content": null,
+                        "encrypted_content": "opaque"
+                    }),
+                },
+                UniversalItem::Message {
+                    role: Role::User,
+                    id: None,
+                    content: vec![ContentBlock::Text {
+                        text: "Hello".to_string(),
+                    }],
+                    extensions: Default::default(),
+                },
+            ],
+            ..UniversalRequest::default()
+        };
+
+        let encoded = encode(&request).expect("request encodes");
+
+        let messages = encoded["messages"].as_array().unwrap();
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0]["role"], "user");
+        assert_eq!(messages[0]["content"], "Hello");
     }
 }
