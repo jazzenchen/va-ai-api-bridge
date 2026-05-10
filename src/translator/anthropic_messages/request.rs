@@ -5,11 +5,8 @@ use crate::schema::anthropic::{
 };
 use crate::translator::{anthropic, common};
 use crate::{
-    ApiProxyError, ContentBlock, Result, Role, ToolChoice, UniversalItem, UniversalRequest,
-    WireProtocol,
+    ApiProxyError, ContentBlock, Result, Role, UniversalItem, UniversalRequest, WireProtocol,
 };
-
-const DEFAULT_ANTHROPIC_MAX_TOKENS: u64 = 4096;
 
 pub(super) fn decode(raw: Value) -> Result<UniversalRequest> {
     let source_raw = raw.clone();
@@ -50,29 +47,17 @@ pub(super) fn encode(request: &UniversalRequest) -> Result<Value> {
     if let Some(model) = &request.model {
         body.insert("model".to_string(), Value::String(model.clone()));
     }
-    let max_tokens = request
-        .generation
-        .max_output_tokens
-        .unwrap_or(DEFAULT_ANTHROPIC_MAX_TOKENS);
-    body.insert("max_tokens".to_string(), json!(max_tokens));
+    if let Some(max_tokens) = request.generation.max_output_tokens {
+        body.insert("max_tokens".to_string(), json!(max_tokens));
+    }
     if request.stream {
         body.insert("stream".to_string(), Value::Bool(true));
     }
-    let mut anthropic_thinking = request.reasoning.as_ref().and_then(|reasoning| {
-        anthropic::anthropic_thinking_from_reasoning(reasoning, Some(max_tokens))
-    });
-    if anthropic_thinking.is_some() && is_forced_tool_choice(request.tool_choice.as_ref()) {
-        anthropic_thinking = None;
-    }
-    if anthropic_thinking.is_none() {
-        if let Some(temperature) = request.generation.temperature {
-            body.insert("temperature".to_string(), json!(temperature));
-        }
+    if let Some(temperature) = request.generation.temperature {
+        body.insert("temperature".to_string(), json!(temperature));
     }
     if let Some(top_p) = request.generation.top_p {
-        if anthropic_thinking.is_none() || valid_anthropic_thinking_top_p(top_p) {
-            body.insert("top_p".to_string(), json!(top_p));
-        }
+        body.insert("top_p".to_string(), json!(top_p));
     }
     if !request.tools.is_empty() {
         body.insert(
@@ -92,8 +77,13 @@ pub(super) fn encode(request: &UniversalRequest) -> Result<Value> {
             anthropic::tool_choice_to_anthropic(tool_choice),
         );
     }
-    if let Some(thinking) = anthropic_thinking {
-        body.insert("thinking".to_string(), thinking);
+    if let Some(reasoning) = &request.reasoning {
+        if let Some(thinking) = anthropic::anthropic_thinking_from_reasoning(
+            reasoning,
+            request.generation.max_output_tokens,
+        ) {
+            body.insert("thinking".to_string(), thinking);
+        }
     }
 
     let mut system_blocks = request.instructions.clone();
@@ -294,17 +284,6 @@ fn is_empty_message_content(content: &[ContentBlock]) -> bool {
     })
 }
 
-fn is_forced_tool_choice(tool_choice: Option<&ToolChoice>) -> bool {
-    matches!(
-        tool_choice,
-        Some(ToolChoice::Required | ToolChoice::Tool { .. })
-    )
-}
-
-fn valid_anthropic_thinking_top_p(top_p: f64) -> bool {
-    (0.95..=1.0).contains(&top_p)
-}
-
 fn flush_anthropic_blocks(
     messages: &mut Vec<Value>,
     role: &str,
@@ -324,10 +303,7 @@ fn flush_anthropic_blocks(
 mod tests {
     use serde_json::json;
 
-    use crate::{
-        ContentBlock, GenerationConfig, ReasoningConfig, Role, ToolChoice, UniversalItem,
-        UniversalRequest,
-    };
+    use crate::{ContentBlock, Role, UniversalItem, UniversalRequest};
 
     use super::encode;
 
@@ -525,87 +501,5 @@ mod tests {
         assert_eq!(encoded["system"][0]["type"], "text");
         assert_eq!(encoded["system"][0]["text"], "Be precise.");
         assert_eq!(encoded["system"][1]["text"], "Prefer JSON.");
-    }
-
-    #[test]
-    fn defaults_max_tokens_for_anthropic_messages() {
-        let request = UniversalRequest {
-            model: Some("minimax".to_string()),
-            input: vec![UniversalItem::Message {
-                role: Role::User,
-                id: None,
-                content: vec![ContentBlock::Text {
-                    text: "Ping".to_string(),
-                }],
-                extensions: Default::default(),
-            }],
-            ..UniversalRequest::default()
-        };
-
-        let encoded = encode(&request).expect("request encodes");
-
-        assert_eq!(encoded["max_tokens"], 4096);
-    }
-
-    #[test]
-    fn omits_thinking_when_tool_choice_forces_tool_use() {
-        let request = UniversalRequest {
-            model: Some("minimax".to_string()),
-            tool_choice: Some(ToolChoice::Required),
-            reasoning: Some(ReasoningConfig {
-                effort: Some("medium".to_string()),
-                budget_tokens: None,
-                visible: None,
-                extensions: Default::default(),
-            }),
-            input: vec![UniversalItem::Message {
-                role: Role::User,
-                id: None,
-                content: vec![ContentBlock::Text {
-                    text: "Ping".to_string(),
-                }],
-                extensions: Default::default(),
-            }],
-            ..UniversalRequest::default()
-        };
-
-        let encoded = encode(&request).expect("request encodes");
-
-        assert_eq!(encoded["tool_choice"]["type"], "any");
-        assert!(encoded.get("thinking").is_none());
-    }
-
-    #[test]
-    fn omits_invalid_sampling_params_when_thinking_enabled() {
-        let request = UniversalRequest {
-            model: Some("minimax".to_string()),
-            generation: GenerationConfig {
-                temperature: Some(0.2),
-                top_p: Some(0.9),
-                max_output_tokens: Some(4096),
-                extensions: Default::default(),
-            },
-            reasoning: Some(ReasoningConfig {
-                effort: Some("medium".to_string()),
-                budget_tokens: None,
-                visible: None,
-                extensions: Default::default(),
-            }),
-            input: vec![UniversalItem::Message {
-                role: Role::User,
-                id: None,
-                content: vec![ContentBlock::Text {
-                    text: "Ping".to_string(),
-                }],
-                extensions: Default::default(),
-            }],
-            ..UniversalRequest::default()
-        };
-
-        let encoded = encode(&request).expect("request encodes");
-
-        assert!(encoded.get("thinking").is_some());
-        assert!(encoded.get("temperature").is_none());
-        assert!(encoded.get("top_p").is_none());
     }
 }
