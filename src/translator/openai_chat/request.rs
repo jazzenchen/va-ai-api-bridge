@@ -86,6 +86,7 @@ pub(super) fn encode(request: &UniversalRequest) -> Result<Value> {
     }
 
     let mut pending_tool_calls = Vec::new();
+    let mut pending_tool_content = Vec::new();
     let mut pending_tool_reasoning_content = None;
     for item in &request.input {
         match item {
@@ -98,9 +99,17 @@ pub(super) fn encode(request: &UniversalRequest) -> Result<Value> {
                 if is_empty_assistant_message(*role, content, extensions) {
                     continue;
                 }
+                if *role == Role::Assistant && !pending_tool_calls.is_empty() {
+                    pending_tool_content.extend(content.iter().cloned());
+                    if pending_tool_reasoning_content.is_none() {
+                        pending_tool_reasoning_content = reasoning_content_extension(extensions);
+                    }
+                    continue;
+                }
                 flush_tool_calls(
                     &mut messages,
                     &mut pending_tool_calls,
+                    &mut pending_tool_content,
                     &mut pending_tool_reasoning_content,
                 )?;
                 let mut message = message_value(
@@ -131,6 +140,7 @@ pub(super) fn encode(request: &UniversalRequest) -> Result<Value> {
                 flush_tool_calls(
                     &mut messages,
                     &mut pending_tool_calls,
+                    &mut pending_tool_content,
                     &mut pending_tool_reasoning_content,
                 )?;
                 messages.push(message_value(
@@ -144,6 +154,7 @@ pub(super) fn encode(request: &UniversalRequest) -> Result<Value> {
                 flush_tool_calls(
                     &mut messages,
                     &mut pending_tool_calls,
+                    &mut pending_tool_content,
                     &mut pending_tool_reasoning_content,
                 )?;
                 messages.push(raw.clone());
@@ -154,6 +165,7 @@ pub(super) fn encode(request: &UniversalRequest) -> Result<Value> {
     flush_tool_calls(
         &mut messages,
         &mut pending_tool_calls,
+        &mut pending_tool_content,
         &mut pending_tool_reasoning_content,
     )?;
 
@@ -287,12 +299,19 @@ fn chat_tool_call_value(id: &str, name: &str, arguments: &Value) -> Value {
 fn flush_tool_calls(
     messages: &mut Vec<Value>,
     pending_tool_calls: &mut Vec<Value>,
+    pending_tool_content: &mut Vec<ContentBlock>,
     pending_tool_reasoning_content: &mut Option<String>,
 ) -> Result<()> {
     if pending_tool_calls.is_empty() {
         return Ok(());
     }
-    let mut message = message_value("assistant", None, None, std::mem::take(pending_tool_calls))?;
+    let content_blocks = std::mem::take(pending_tool_content);
+    let mut message = message_value(
+        "assistant",
+        openai::blocks_to_openai_content(&content_blocks, "text", "image_url"),
+        None,
+        std::mem::take(pending_tool_calls),
+    )?;
     if let Some(reasoning_content) = pending_tool_reasoning_content.take() {
         if let Some(object) = message.as_object_mut() {
             object.insert(
@@ -397,6 +416,64 @@ mod tests {
         assert_eq!(messages[0]["tool_calls"][0]["id"], "call_pwd");
         assert_eq!(messages[1]["role"], "tool");
         assert_eq!(messages[1]["tool_call_id"], "call_pwd");
+    }
+
+    #[test]
+    fn attaches_assistant_text_to_pending_tool_calls_before_tool_results() {
+        let request = UniversalRequest {
+            model: Some("chat-model".to_string()),
+            input: vec![
+                UniversalItem::ToolCall {
+                    id: "call_ls".to_string(),
+                    name: "exec_command".to_string(),
+                    arguments: json!({ "cmd": "ls" }),
+                    extensions: Default::default(),
+                },
+                UniversalItem::ToolCall {
+                    id: "call_pwd".to_string(),
+                    name: "exec_command".to_string(),
+                    arguments: json!({ "cmd": "pwd" }),
+                    extensions: Default::default(),
+                },
+                UniversalItem::Message {
+                    role: Role::Assistant,
+                    id: None,
+                    content: vec![ContentBlock::Text {
+                        text: "I will inspect the project first.".to_string(),
+                    }],
+                    extensions: Default::default(),
+                },
+                UniversalItem::ToolResult {
+                    tool_call_id: "call_ls".to_string(),
+                    content: vec![ContentBlock::Text {
+                        text: "Cargo.toml".to_string(),
+                    }],
+                    is_error: false,
+                    extensions: Default::default(),
+                },
+                UniversalItem::ToolResult {
+                    tool_call_id: "call_pwd".to_string(),
+                    content: vec![ContentBlock::Text {
+                        text: "/tmp/project".to_string(),
+                    }],
+                    is_error: false,
+                    extensions: Default::default(),
+                },
+            ],
+            ..UniversalRequest::default()
+        };
+
+        let encoded = encode(&request).expect("request encodes");
+
+        let messages = encoded["messages"].as_array().unwrap();
+        assert_eq!(messages.len(), 3);
+        assert_eq!(messages[0]["role"], "assistant");
+        assert_eq!(messages[0]["content"], "I will inspect the project first.");
+        assert_eq!(messages[0]["tool_calls"].as_array().unwrap().len(), 2);
+        assert_eq!(messages[1]["role"], "tool");
+        assert_eq!(messages[1]["tool_call_id"], "call_ls");
+        assert_eq!(messages[2]["role"], "tool");
+        assert_eq!(messages[2]["tool_call_id"], "call_pwd");
     }
 
     #[test]
