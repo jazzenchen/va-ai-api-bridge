@@ -2,7 +2,9 @@ use serde_json::{json, Map, Value};
 
 use crate::schema::openai::{ChatCompletionRequest, ChatMessage, ChatToolCall};
 use crate::translator::{common, openai};
-use crate::{ApiProxyError, Result, Role, UniversalItem, UniversalRequest, WireProtocol};
+use crate::{
+    ApiProxyError, ContentBlock, Result, Role, UniversalItem, UniversalRequest, WireProtocol,
+};
 
 pub(super) fn decode(raw: Value) -> Result<UniversalRequest> {
     let source_raw = raw.clone();
@@ -93,6 +95,9 @@ pub(super) fn encode(request: &UniversalRequest) -> Result<Value> {
                 extensions,
                 ..
             } => {
+                if is_empty_assistant_message(*role, content, extensions) {
+                    continue;
+                }
                 flush_tool_calls(
                     &mut messages,
                     &mut pending_tool_calls,
@@ -154,6 +159,26 @@ pub(super) fn encode(request: &UniversalRequest) -> Result<Value> {
 
     body.insert("messages".to_string(), Value::Array(messages));
     Ok(Value::Object(body))
+}
+
+fn is_empty_assistant_message(
+    role: Role,
+    content: &[ContentBlock],
+    extensions: &crate::Extensions,
+) -> bool {
+    role == Role::Assistant
+        && extensions.is_empty()
+        && content.iter().all(is_empty_message_content_block)
+}
+
+fn is_empty_message_content_block(block: &ContentBlock) -> bool {
+    match block {
+        ContentBlock::Text { text } => text.trim().is_empty(),
+        ContentBlock::Reasoning { text, .. } => {
+            text.as_deref().is_none_or(|text| text.trim().is_empty())
+        }
+        _ => false,
+    }
 }
 
 fn decode_message(message: ChatMessage, request: &mut UniversalRequest) {
@@ -302,6 +327,7 @@ mod tests {
     use serde_json::json;
 
     use super::{decode, encode};
+    use crate::{ContentBlock, Role, UniversalItem, UniversalRequest};
 
     #[test]
     fn preserves_reasoning_content_on_assistant_tool_call_messages() {
@@ -329,5 +355,44 @@ mod tests {
             "I should inspect cwd."
         );
         assert_eq!(encoded["messages"][0]["tool_calls"][0]["id"], "call_123");
+    }
+
+    #[test]
+    fn skips_empty_assistant_message_between_tool_call_and_tool_result() {
+        let request = UniversalRequest {
+            model: Some("chat-model".to_string()),
+            input: vec![
+                UniversalItem::ToolCall {
+                    id: "call_pwd".to_string(),
+                    name: "exec_command".to_string(),
+                    arguments: json!({ "cmd": "pwd" }),
+                    extensions: Default::default(),
+                },
+                UniversalItem::Message {
+                    role: Role::Assistant,
+                    id: None,
+                    content: Vec::new(),
+                    extensions: Default::default(),
+                },
+                UniversalItem::ToolResult {
+                    tool_call_id: "call_pwd".to_string(),
+                    content: vec![ContentBlock::Text {
+                        text: "/tmp/project".to_string(),
+                    }],
+                    is_error: false,
+                    extensions: Default::default(),
+                },
+            ],
+            ..UniversalRequest::default()
+        };
+
+        let encoded = encode(&request).expect("request encodes");
+
+        let messages = encoded["messages"].as_array().unwrap();
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[0]["role"], "assistant");
+        assert_eq!(messages[0]["tool_calls"][0]["id"], "call_pwd");
+        assert_eq!(messages[1]["role"], "tool");
+        assert_eq!(messages[1]["tool_call_id"], "call_pwd");
     }
 }
