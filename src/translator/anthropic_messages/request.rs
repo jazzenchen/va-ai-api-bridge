@@ -5,8 +5,11 @@ use crate::schema::anthropic::{
 };
 use crate::translator::{anthropic, common};
 use crate::{
-    ApiProxyError, ContentBlock, Result, Role, UniversalItem, UniversalRequest, WireProtocol,
+    ApiProxyError, ContentBlock, Result, Role, ToolChoice, UniversalItem, UniversalRequest,
+    WireProtocol,
 };
+
+const DEFAULT_ANTHROPIC_MAX_TOKENS: u64 = 4096;
 
 pub(super) fn decode(raw: Value) -> Result<UniversalRequest> {
     let source_raw = raw.clone();
@@ -47,24 +50,29 @@ pub(super) fn encode(request: &UniversalRequest) -> Result<Value> {
     if let Some(model) = &request.model {
         body.insert("model".to_string(), Value::String(model.clone()));
     }
-    if let Some(max_tokens) = request.generation.max_output_tokens {
-        body.insert("max_tokens".to_string(), json!(max_tokens));
-    }
+    let max_tokens = request
+        .generation
+        .max_output_tokens
+        .unwrap_or(DEFAULT_ANTHROPIC_MAX_TOKENS);
+    body.insert("max_tokens".to_string(), json!(max_tokens));
     if request.stream {
         body.insert("stream".to_string(), Value::Bool(true));
     }
-    if let Some(temperature) = request.generation.temperature {
-        body.insert("temperature".to_string(), json!(temperature));
+    let mut anthropic_thinking = request.reasoning.as_ref().and_then(|reasoning| {
+        anthropic::anthropic_thinking_from_reasoning(reasoning, Some(max_tokens))
+    });
+    if anthropic_thinking.is_some() && is_forced_tool_choice(request.tool_choice.as_ref()) {
+        anthropic_thinking = None;
+    }
+    if anthropic_thinking.is_none() {
+        if let Some(temperature) = request.generation.temperature {
+            body.insert("temperature".to_string(), json!(temperature));
+        }
     }
     if let Some(top_p) = request.generation.top_p {
-        body.insert("top_p".to_string(), json!(top_p));
-    }
-    if let Some(system) = anthropic::blocks_to_anthropic_system(&request.instructions) {
-        body.insert(
-            "system".to_string(),
-            serde_json::to_value(system)
-                .map_err(|error| ApiProxyError::conversion(error.to_string()))?,
-        );
+        if anthropic_thinking.is_none() || valid_anthropic_thinking_top_p(top_p) {
+            body.insert("top_p".to_string(), json!(top_p));
+        }
     }
     if !request.tools.is_empty() {
         body.insert(
@@ -84,27 +92,42 @@ pub(super) fn encode(request: &UniversalRequest) -> Result<Value> {
             anthropic::tool_choice_to_anthropic(tool_choice),
         );
     }
-    if let Some(reasoning) = &request.reasoning {
-        if let Some(thinking) = anthropic::anthropic_thinking_from_reasoning(
-            reasoning,
-            request.generation.max_output_tokens,
-        ) {
-            body.insert("thinking".to_string(), thinking);
-        }
+    if let Some(thinking) = anthropic_thinking {
+        body.insert("thinking".to_string(), thinking);
     }
 
+    let mut system_blocks = request.instructions.clone();
     let mut messages = Vec::new();
-    let mut pending_tool_calls = Vec::new();
+    let mut pending_assistant_blocks = Vec::new();
     let mut pending_tool_results = Vec::new();
     for item in &request.input {
         match item {
             UniversalItem::Message { role, content, .. } => {
-                flush_anthropic_blocks(&mut messages, "assistant", &mut pending_tool_calls)?;
-                flush_anthropic_blocks(&mut messages, "user", &mut pending_tool_results)?;
-                messages.push(anthropic_message_value(
-                    anthropic::role_to_anthropic(*role),
-                    anthropic::blocks_to_anthropic_content(content),
-                )?);
+                if is_empty_message_content(content) {
+                    continue;
+                }
+                if *role == Role::Assistant {
+                    flush_anthropic_blocks(&mut messages, "user", &mut pending_tool_results)?;
+                    pending_assistant_blocks.extend(anthropic_blocks(content));
+                } else if *role == Role::System {
+                    system_blocks.extend(content.iter().cloned());
+                } else {
+                    flush_anthropic_blocks(
+                        &mut messages,
+                        "assistant",
+                        &mut pending_assistant_blocks,
+                    )?;
+                    if *role == Role::User && !pending_tool_results.is_empty() {
+                        pending_tool_results.extend(anthropic_blocks(content));
+                        flush_anthropic_blocks(&mut messages, "user", &mut pending_tool_results)?;
+                    } else {
+                        flush_anthropic_blocks(&mut messages, "user", &mut pending_tool_results)?;
+                        messages.push(anthropic_message_value(
+                            anthropic::role_to_anthropic(*role),
+                            anthropic::blocks_to_anthropic_content(content),
+                        )?);
+                    }
+                }
             }
             UniversalItem::ToolCall {
                 id,
@@ -119,7 +142,7 @@ pub(super) fn encode(request: &UniversalRequest) -> Result<Value> {
                     extensions: common::empty_extensions(),
                 };
                 flush_anthropic_blocks(&mut messages, "user", &mut pending_tool_results)?;
-                pending_tool_calls.push(anthropic::block_to_anthropic_block(&block));
+                pending_assistant_blocks.push(anthropic::block_to_anthropic_block(&block));
             }
             UniversalItem::ToolResult {
                 tool_call_id,
@@ -133,17 +156,19 @@ pub(super) fn encode(request: &UniversalRequest) -> Result<Value> {
                     is_error: *is_error,
                     extensions: common::empty_extensions(),
                 };
-                flush_anthropic_blocks(&mut messages, "assistant", &mut pending_tool_calls)?;
+                flush_anthropic_blocks(&mut messages, "assistant", &mut pending_assistant_blocks)?;
                 pending_tool_results.push(anthropic::block_to_anthropic_block(&block));
             }
             UniversalItem::Reasoning {
                 text, encrypted, ..
             } => {
-                flush_anthropic_blocks(&mut messages, "assistant", &mut pending_tool_calls)?;
                 flush_anthropic_blocks(&mut messages, "user", &mut pending_tool_results)?;
-                messages.push(anthropic_message_value(
-                    "assistant",
-                    AnthropicContent::Blocks(vec![AnthropicContentBlock {
+                if text.as_deref().is_some_and(|text| !text.is_empty())
+                    || encrypted
+                        .as_deref()
+                        .is_some_and(|encrypted| !encrypted.is_empty())
+                {
+                    pending_assistant_blocks.push(AnthropicContentBlock {
                         kind: "thinking".to_string(),
                         text: None,
                         source: None,
@@ -155,18 +180,25 @@ pub(super) fn encode(request: &UniversalRequest) -> Result<Value> {
                         thinking: text.clone(),
                         signature: encrypted.clone(),
                         extra: Default::default(),
-                    }]),
-                )?);
+                    });
+                }
             }
             UniversalItem::Unknown { raw } => {
-                flush_anthropic_blocks(&mut messages, "assistant", &mut pending_tool_calls)?;
+                flush_anthropic_blocks(&mut messages, "assistant", &mut pending_assistant_blocks)?;
                 flush_anthropic_blocks(&mut messages, "user", &mut pending_tool_results)?;
                 messages.push(raw.clone());
             }
         }
     }
-    flush_anthropic_blocks(&mut messages, "assistant", &mut pending_tool_calls)?;
+    flush_anthropic_blocks(&mut messages, "assistant", &mut pending_assistant_blocks)?;
     flush_anthropic_blocks(&mut messages, "user", &mut pending_tool_results)?;
+    if let Some(system) = anthropic::blocks_to_anthropic_system(&system_blocks) {
+        body.insert(
+            "system".to_string(),
+            serde_json::to_value(system)
+                .map_err(|error| ApiProxyError::conversion(error.to_string()))?,
+        );
+    }
     body.insert("messages".to_string(), Value::Array(messages));
 
     Ok(Value::Object(body))
@@ -242,6 +274,37 @@ fn anthropic_message_value(role: &str, content: AnthropicContent) -> Result<Valu
     Ok(Value::Object(message))
 }
 
+fn anthropic_blocks(blocks: &[ContentBlock]) -> Vec<AnthropicContentBlock> {
+    blocks
+        .iter()
+        .map(anthropic::block_to_anthropic_block)
+        .collect()
+}
+
+fn is_empty_message_content(content: &[ContentBlock]) -> bool {
+    content.iter().all(|block| match block {
+        ContentBlock::Text { text } => text.trim().is_empty(),
+        ContentBlock::Reasoning {
+            text, encrypted, ..
+        } => {
+            text.as_deref().unwrap_or_default().trim().is_empty()
+                && encrypted.as_deref().unwrap_or_default().trim().is_empty()
+        }
+        _ => false,
+    })
+}
+
+fn is_forced_tool_choice(tool_choice: Option<&ToolChoice>) -> bool {
+    matches!(
+        tool_choice,
+        Some(ToolChoice::Required | ToolChoice::Tool { .. })
+    )
+}
+
+fn valid_anthropic_thinking_top_p(top_p: f64) -> bool {
+    (0.95..=1.0).contains(&top_p)
+}
+
 fn flush_anthropic_blocks(
     messages: &mut Vec<Value>,
     role: &str,
@@ -255,4 +318,294 @@ fn flush_anthropic_blocks(
         AnthropicContent::Blocks(std::mem::take(blocks)),
     )?);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use crate::{
+        ContentBlock, GenerationConfig, ReasoningConfig, Role, ToolChoice, UniversalItem,
+        UniversalRequest,
+    };
+
+    use super::encode;
+
+    #[test]
+    fn skips_empty_assistant_message_between_tool_use_and_tool_result() {
+        let request = UniversalRequest {
+            model: Some("minimax".to_string()),
+            input: vec![
+                UniversalItem::ToolCall {
+                    id: "call_1".to_string(),
+                    name: "list_files".to_string(),
+                    arguments: json!({ "path": "." }),
+                    extensions: Default::default(),
+                },
+                UniversalItem::Message {
+                    role: Role::Assistant,
+                    id: None,
+                    content: Vec::new(),
+                    extensions: Default::default(),
+                },
+                UniversalItem::ToolResult {
+                    tool_call_id: "call_1".to_string(),
+                    content: vec![ContentBlock::Text {
+                        text: "Cargo.toml".to_string(),
+                    }],
+                    is_error: false,
+                    extensions: Default::default(),
+                },
+            ],
+            ..UniversalRequest::default()
+        };
+
+        let encoded = encode(&request).expect("request encodes");
+        let messages = encoded["messages"].as_array().unwrap();
+
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[0]["role"], "assistant");
+        assert_eq!(messages[0]["content"][0]["type"], "tool_use");
+        assert_eq!(messages[1]["role"], "user");
+        assert_eq!(messages[1]["content"][0]["type"], "tool_result");
+        assert_eq!(messages[1]["content"][0]["tool_use_id"], "call_1");
+    }
+
+    #[test]
+    fn combines_reasoning_and_tool_use_into_one_assistant_turn() {
+        let request = UniversalRequest {
+            model: Some("minimax".to_string()),
+            input: vec![
+                UniversalItem::Reasoning {
+                    id: None,
+                    text: Some("Need to inspect files.".to_string()),
+                    encrypted: None,
+                    extensions: Default::default(),
+                },
+                UniversalItem::ToolCall {
+                    id: "call_1".to_string(),
+                    name: "list_files".to_string(),
+                    arguments: json!({ "path": "." }),
+                    extensions: Default::default(),
+                },
+                UniversalItem::ToolResult {
+                    tool_call_id: "call_1".to_string(),
+                    content: vec![ContentBlock::Text {
+                        text: "Cargo.toml".to_string(),
+                    }],
+                    is_error: false,
+                    extensions: Default::default(),
+                },
+            ],
+            ..UniversalRequest::default()
+        };
+
+        let encoded = encode(&request).expect("request encodes");
+        let messages = encoded["messages"].as_array().unwrap();
+
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[0]["content"][0]["type"], "thinking");
+        assert_eq!(messages[0]["content"][1]["type"], "tool_use");
+        assert_eq!(messages[1]["content"][0]["type"], "tool_result");
+    }
+
+    #[test]
+    fn combines_assistant_text_and_tool_use_into_one_assistant_turn() {
+        let request = UniversalRequest {
+            model: Some("minimax".to_string()),
+            input: vec![
+                UniversalItem::Message {
+                    role: Role::Assistant,
+                    id: None,
+                    content: vec![ContentBlock::Text {
+                        text: "I will inspect the project.".to_string(),
+                    }],
+                    extensions: Default::default(),
+                },
+                UniversalItem::ToolCall {
+                    id: "call_1".to_string(),
+                    name: "list_files".to_string(),
+                    arguments: json!({ "path": "." }),
+                    extensions: Default::default(),
+                },
+                UniversalItem::ToolResult {
+                    tool_call_id: "call_1".to_string(),
+                    content: vec![ContentBlock::Text {
+                        text: "Cargo.toml".to_string(),
+                    }],
+                    is_error: false,
+                    extensions: Default::default(),
+                },
+            ],
+            ..UniversalRequest::default()
+        };
+
+        let encoded = encode(&request).expect("request encodes");
+        let messages = encoded["messages"].as_array().unwrap();
+
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[0]["content"][0]["type"], "text");
+        assert_eq!(messages[0]["content"][1]["type"], "tool_use");
+        assert_eq!(messages[1]["content"][0]["type"], "tool_result");
+    }
+
+    #[test]
+    fn places_user_text_after_pending_tool_results() {
+        let request = UniversalRequest {
+            model: Some("minimax".to_string()),
+            input: vec![
+                UniversalItem::ToolCall {
+                    id: "call_1".to_string(),
+                    name: "list_files".to_string(),
+                    arguments: json!({ "path": "." }),
+                    extensions: Default::default(),
+                },
+                UniversalItem::ToolResult {
+                    tool_call_id: "call_1".to_string(),
+                    content: vec![ContentBlock::Text {
+                        text: "Cargo.toml".to_string(),
+                    }],
+                    is_error: false,
+                    extensions: Default::default(),
+                },
+                UniversalItem::Message {
+                    role: Role::User,
+                    id: None,
+                    content: vec![ContentBlock::Text {
+                        text: "Continue.".to_string(),
+                    }],
+                    extensions: Default::default(),
+                },
+            ],
+            ..UniversalRequest::default()
+        };
+
+        let encoded = encode(&request).expect("request encodes");
+        let messages = encoded["messages"].as_array().unwrap();
+
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[1]["role"], "user");
+        assert_eq!(messages[1]["content"][0]["type"], "tool_result");
+        assert_eq!(messages[1]["content"][1]["type"], "text");
+    }
+
+    #[test]
+    fn moves_system_messages_to_top_level_system() {
+        let request = UniversalRequest {
+            model: Some("minimax".to_string()),
+            instructions: vec![ContentBlock::Text {
+                text: "Be precise.".to_string(),
+            }],
+            input: vec![
+                UniversalItem::Message {
+                    role: Role::System,
+                    id: None,
+                    content: vec![ContentBlock::Text {
+                        text: "Prefer JSON.".to_string(),
+                    }],
+                    extensions: Default::default(),
+                },
+                UniversalItem::Message {
+                    role: Role::User,
+                    id: None,
+                    content: vec![ContentBlock::Text {
+                        text: "Ping".to_string(),
+                    }],
+                    extensions: Default::default(),
+                },
+            ],
+            ..UniversalRequest::default()
+        };
+
+        let encoded = encode(&request).expect("request encodes");
+        let messages = encoded["messages"].as_array().unwrap();
+
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0]["role"], "user");
+        assert_eq!(encoded["system"][0]["type"], "text");
+        assert_eq!(encoded["system"][0]["text"], "Be precise.");
+        assert_eq!(encoded["system"][1]["text"], "Prefer JSON.");
+    }
+
+    #[test]
+    fn defaults_max_tokens_for_anthropic_messages() {
+        let request = UniversalRequest {
+            model: Some("minimax".to_string()),
+            input: vec![UniversalItem::Message {
+                role: Role::User,
+                id: None,
+                content: vec![ContentBlock::Text {
+                    text: "Ping".to_string(),
+                }],
+                extensions: Default::default(),
+            }],
+            ..UniversalRequest::default()
+        };
+
+        let encoded = encode(&request).expect("request encodes");
+
+        assert_eq!(encoded["max_tokens"], 4096);
+    }
+
+    #[test]
+    fn omits_thinking_when_tool_choice_forces_tool_use() {
+        let request = UniversalRequest {
+            model: Some("minimax".to_string()),
+            tool_choice: Some(ToolChoice::Required),
+            reasoning: Some(ReasoningConfig {
+                effort: Some("medium".to_string()),
+                budget_tokens: None,
+                visible: None,
+                extensions: Default::default(),
+            }),
+            input: vec![UniversalItem::Message {
+                role: Role::User,
+                id: None,
+                content: vec![ContentBlock::Text {
+                    text: "Ping".to_string(),
+                }],
+                extensions: Default::default(),
+            }],
+            ..UniversalRequest::default()
+        };
+
+        let encoded = encode(&request).expect("request encodes");
+
+        assert_eq!(encoded["tool_choice"]["type"], "any");
+        assert!(encoded.get("thinking").is_none());
+    }
+
+    #[test]
+    fn omits_invalid_sampling_params_when_thinking_enabled() {
+        let request = UniversalRequest {
+            model: Some("minimax".to_string()),
+            generation: GenerationConfig {
+                temperature: Some(0.2),
+                top_p: Some(0.9),
+                max_output_tokens: Some(4096),
+                extensions: Default::default(),
+            },
+            reasoning: Some(ReasoningConfig {
+                effort: Some("medium".to_string()),
+                budget_tokens: None,
+                visible: None,
+                extensions: Default::default(),
+            }),
+            input: vec![UniversalItem::Message {
+                role: Role::User,
+                id: None,
+                content: vec![ContentBlock::Text {
+                    text: "Ping".to_string(),
+                }],
+                extensions: Default::default(),
+            }],
+            ..UniversalRequest::default()
+        };
+
+        let encoded = encode(&request).expect("request encodes");
+
+        assert!(encoded.get("thinking").is_some());
+        assert!(encoded.get("temperature").is_none());
+        assert!(encoded.get("top_p").is_none());
+    }
 }

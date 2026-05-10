@@ -66,10 +66,13 @@ pub(crate) fn anthropic_block_to_block(block: &anthropic::AnthropicContentBlock)
                 .unwrap_or(false),
             extensions: empty_extensions(),
         },
-        "thinking" | "redacted_thinking" => ContentBlock::Reasoning {
+        "thinking" => ContentBlock::Reasoning {
             text: block.thinking.clone().or_else(|| block.text.clone()),
             encrypted: block.signature.clone(),
             extensions: empty_extensions(),
+        },
+        "redacted_thinking" => ContentBlock::Unknown {
+            raw: serde_json::to_value(block).unwrap_or(Value::Null),
         },
         _ => ContentBlock::Unknown {
             raw: serde_json::to_value(block).unwrap_or(Value::Null),
@@ -90,5 +93,49 @@ fn value_to_blocks(value: Option<&Value>) -> Vec<ContentBlock> {
             .collect(),
         Some(value) => vec![ContentBlock::Unknown { raw: value.clone() }],
         None => Vec::new(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::{json, Value};
+
+    use crate::schema::anthropic::AnthropicContentBlock;
+    use crate::translator::anthropic::block_to_anthropic_block;
+    use crate::ContentBlock;
+
+    use super::anthropic_block_to_block;
+
+    #[test]
+    fn preserves_redacted_thinking_as_raw_anthropic_block() {
+        let mut extra: crate::schema::anthropic::ExtraFields = Default::default();
+        extra.insert("data".to_string(), json!("opaque"));
+        let block = AnthropicContentBlock {
+            kind: "redacted_thinking".to_string(),
+            text: None,
+            source: None,
+            id: None,
+            name: None,
+            input: None,
+            tool_use_id: None,
+            content: None,
+            thinking: None,
+            signature: None,
+            extra,
+        };
+
+        let decoded = anthropic_block_to_block(&block);
+        let ContentBlock::Unknown { raw } = &decoded else {
+            panic!("redacted thinking should stay raw");
+        };
+        assert_eq!(raw["type"], "redacted_thinking");
+        assert_eq!(raw["data"], "opaque");
+
+        let encoded = block_to_anthropic_block(&decoded);
+        assert_eq!(encoded.kind, "redacted_thinking");
+        assert_eq!(
+            encoded.extra.get("data"),
+            Some(&Value::String("opaque".to_string()))
+        );
     }
 }
