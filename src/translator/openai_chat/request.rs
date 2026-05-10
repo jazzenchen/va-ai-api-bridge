@@ -174,8 +174,11 @@ fn is_empty_assistant_message(
 fn is_empty_message_content_block(block: &ContentBlock) -> bool {
     match block {
         ContentBlock::Text { text } => text.trim().is_empty(),
-        ContentBlock::Reasoning { text, .. } => {
-            text.as_deref().is_none_or(|text| text.trim().is_empty())
+        ContentBlock::Reasoning {
+            text, encrypted, ..
+        } => {
+            text.as_deref().unwrap_or_default().trim().is_empty()
+                && encrypted.as_deref().unwrap_or_default().trim().is_empty()
         }
         _ => false,
     }
@@ -394,5 +397,30 @@ mod tests {
         assert_eq!(messages[0]["tool_calls"][0]["id"], "call_pwd");
         assert_eq!(messages[1]["role"], "tool");
         assert_eq!(messages[1]["tool_call_id"], "call_pwd");
+    }
+
+    #[test]
+    fn preserves_encrypted_reasoning_assistant_message() {
+        let request = UniversalRequest {
+            model: Some("chat-model".to_string()),
+            input: vec![UniversalItem::Message {
+                role: Role::Assistant,
+                id: None,
+                content: vec![ContentBlock::Reasoning {
+                    text: None,
+                    encrypted: Some("opaque-reasoning".to_string()),
+                    extensions: Default::default(),
+                }],
+                extensions: Default::default(),
+            }],
+            ..UniversalRequest::default()
+        };
+
+        let encoded = encode(&request).expect("request encodes");
+
+        let messages = encoded["messages"].as_array().unwrap();
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0]["role"], "assistant");
+        assert_eq!(messages[0]["content"][0]["type"], "unknown");
     }
 }
