@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 
-use serde::{Deserialize, Serialize};
+use serde::de;
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 
 pub type ExtraFields = BTreeMap<String, Value>;
@@ -77,7 +78,11 @@ pub struct OpenAiContentPart {
     pub kind: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub text: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "deserialize_openai_image_url",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub image_url: Option<OpenAiImageUrl>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub input_text: Option<String>,
@@ -101,6 +106,39 @@ pub struct OpenAiImageUrl {
     pub detail: Option<String>,
     #[serde(default, skip_serializing_if = "ExtraFields::is_empty", flatten)]
     pub extra: ExtraFields,
+}
+
+fn deserialize_openai_image_url<'de, D>(deserializer: D) -> Result<Option<OpenAiImageUrl>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let Some(value) = Option::<Value>::deserialize(deserializer)? else {
+        return Ok(None);
+    };
+    match value {
+        Value::Null => Ok(None),
+        Value::String(url) => Ok(Some(OpenAiImageUrl {
+            url,
+            detail: None,
+            extra: ExtraFields::new(),
+        })),
+        Value::Object(mut object) => {
+            let url = object
+                .remove("url")
+                .or_else(|| object.remove("image_url"))
+                .and_then(|value| value.as_str().map(ToString::to_string))
+                .ok_or_else(|| de::Error::custom("image_url object must include url"))?;
+            let detail = object
+                .remove("detail")
+                .and_then(|value| value.as_str().map(ToString::to_string));
+            Ok(Some(OpenAiImageUrl {
+                url,
+                detail,
+                extra: object.into_iter().collect(),
+            }))
+        }
+        _ => Err(de::Error::custom("image_url must be a string or object")),
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

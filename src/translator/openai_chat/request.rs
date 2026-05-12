@@ -412,7 +412,10 @@ mod tests {
     use serde_json::json;
 
     use super::{decode, encode};
-    use crate::{ContentBlock, Role, UniversalItem, UniversalRequest};
+    use crate::{
+        ContentBlock, OpenAiResponsesTranslator, Role, UniversalItem, UniversalRequest,
+        WireTranslator,
+    };
 
     #[test]
     fn preserves_reasoning_content_on_assistant_tool_call_messages() {
@@ -649,6 +652,35 @@ mod tests {
         assert_eq!(messages.len(), 1);
         assert_eq!(messages[0]["role"], "assistant");
         assert_eq!(messages[0]["content"], "Visible text.");
+    }
+
+    #[test]
+    fn responses_input_image_encodes_as_chat_image_url() {
+        let universal = OpenAiResponsesTranslator
+            .decode_request(json!({
+                "model": "qwen3.6-plus",
+                "input": [{
+                    "type": "message",
+                    "role": "user",
+                    "content": [
+                        { "type": "input_text", "text": "What is in this image?" },
+                        {
+                            "type": "input_image",
+                            "image_url": "data:image/png;base64,abc123"
+                        }
+                    ]
+                }]
+            }))
+            .expect("responses request decodes");
+
+        let encoded = encode(&universal).expect("chat request encodes");
+
+        assert_eq!(encoded["messages"][0]["content"][0]["type"], "text");
+        assert_eq!(encoded["messages"][0]["content"][1]["type"], "image_url");
+        assert_eq!(
+            encoded["messages"][0]["content"][1]["image_url"]["url"],
+            "data:image/png;base64,abc123"
+        );
     }
 
     #[test]
