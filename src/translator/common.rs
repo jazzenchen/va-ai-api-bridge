@@ -19,7 +19,8 @@ pub(crate) fn source(protocol: WireProtocol, raw: Value) -> SourcePayload {
 
 pub(crate) fn role_from_wire(role: &str) -> Option<Role> {
     match role {
-        "developer" | "system" => Some(Role::System),
+        "developer" => Some(Role::Developer),
+        "system" => Some(Role::System),
         "user" => Some(Role::User),
         "assistant" => Some(Role::Assistant),
         "tool" => Some(Role::Tool),

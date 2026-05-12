@@ -13,6 +13,7 @@ use super::common::empty_extensions;
 
 pub(crate) fn role_to_openai(role: Role) -> &'static str {
     match role {
+        Role::Developer => "developer",
         Role::System => "system",
         Role::User => "user",
         Role::Assistant => "assistant",

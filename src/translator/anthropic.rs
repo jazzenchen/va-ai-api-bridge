@@ -13,7 +13,7 @@ use super::common::empty_extensions;
 
 pub(crate) fn role_to_anthropic(role: Role) -> &'static str {
     match role {
-        Role::System | Role::User | Role::Tool => "user",
+        Role::Developer | Role::System | Role::User | Role::Tool => "user",
         Role::Assistant => "assistant",
     }
 }

@@ -25,5 +25,5 @@ pub use translator::{
 };
 pub use universal::{
     ContentBlock, Extensions, FinishReason, GenerationConfig, ReasoningConfig, Role, SourcePayload,
-    ToolChoice, UniversalItem, UniversalRequest, UniversalTool, Usage,
+    ToolChoice, UniversalItem, UniversalRequest, UniversalResponse, UniversalTool, Usage,
 };
