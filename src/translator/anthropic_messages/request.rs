@@ -99,7 +99,7 @@ pub(super) fn encode(request: &UniversalRequest) -> Result<Value> {
                 if *role == Role::Assistant {
                     flush_anthropic_blocks(&mut messages, "user", &mut pending_tool_results)?;
                     pending_assistant_blocks.extend(anthropic_blocks(content));
-                } else if *role == Role::System {
+                } else if matches!(role, Role::Developer | Role::System) {
                     system_blocks.extend(content.iter().cloned());
                 } else {
                     flush_anthropic_blocks(

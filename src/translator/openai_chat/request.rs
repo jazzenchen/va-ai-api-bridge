@@ -114,7 +114,7 @@ pub(super) fn encode(request: &UniversalRequest) -> Result<Value> {
                     &mut pending_tool_reasoning_content,
                 )?;
                 let mut message = message_value(
-                    openai::role_to_openai(*role),
+                    role_to_chat_message_role(*role),
                     openai::blocks_to_openai_content(&chat_content, "text", "image_url"),
                     None,
                     Vec::new(),
@@ -237,13 +237,23 @@ fn unknown_chat_message(raw: &Value) -> Option<Value> {
     .then(|| raw.clone())
 }
 
+fn role_to_chat_message_role(role: Role) -> &'static str {
+    match role {
+        // Chat Completions-compatible providers often only accept the classic
+        // role set. Preserve developer instructions as system content rather
+        // than emitting a role many upstreams reject.
+        Role::Developer | Role::System => "system",
+        other => openai::role_to_openai(other),
+    }
+}
+
 fn decode_message(message: ChatMessage, request: &mut UniversalRequest) {
     let role = common::role_from_wire(&message.role);
     let blocks = openai::openai_content_to_blocks(message.content.as_ref());
     let extensions = common::value_extensions(message.extra.clone());
 
     match role {
-        Some(Role::System) => request.instructions.extend(blocks),
+        Some(Role::Developer | Role::System) => request.instructions.extend(blocks),
         Some(Role::Tool) => request.input.push(UniversalItem::ToolResult {
             tool_call_id: message.tool_call_id.unwrap_or_default(),
             content: blocks,
@@ -418,6 +428,40 @@ mod tests {
             "I should inspect cwd."
         );
         assert_eq!(encoded["messages"][0]["tool_calls"][0]["id"], "call_123");
+    }
+
+    #[test]
+    fn encodes_developer_messages_as_system_for_chat_compatibility() {
+        let request = UniversalRequest {
+            model: Some("chat-model".to_string()),
+            input: vec![
+                UniversalItem::Message {
+                    role: Role::Developer,
+                    id: None,
+                    content: vec![ContentBlock::Text {
+                        text: "Follow the dashboard contract.".to_string(),
+                    }],
+                    extensions: Default::default(),
+                },
+                UniversalItem::Message {
+                    role: Role::User,
+                    id: None,
+                    content: vec![ContentBlock::Text {
+                        text: "Hello".to_string(),
+                    }],
+                    extensions: Default::default(),
+                },
+            ],
+            ..UniversalRequest::default()
+        };
+
+        let encoded = encode(&request).expect("request encodes");
+
+        let messages = encoded["messages"].as_array().unwrap();
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[0]["role"], "system");
+        assert_eq!(messages[0]["content"], "Follow the dashboard contract.");
+        assert_eq!(messages[1]["role"], "user");
     }
 
     #[test]
