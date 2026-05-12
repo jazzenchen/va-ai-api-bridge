@@ -101,6 +101,24 @@ fn value_to_file_or_unknown(value: &Value) -> ContentBlock {
     if let Some(file_id) = object.get("file_id") {
         extensions.insert("file_id".to_string(), file_id.clone());
     }
+    let explicit_url = object
+        .get("url")
+        .or_else(|| object.get("file_url"))
+        .or_else(|| object.get("fileUrl"))
+        .and_then(Value::as_str)
+        .map(ToString::to_string);
+    let file_data = object
+        .get("data")
+        .or_else(|| object.get("file_data"))
+        .or_else(|| object.get("fileData"))
+        .and_then(Value::as_str)
+        .map(ToString::to_string);
+    let (url, data) = match (explicit_url, file_data) {
+        (Some(url), data) => (Some(url), data),
+        (None, Some(value)) if is_http_url(&value) => (Some(value), None),
+        (None, data) => (None, data),
+    };
+
     ContentBlock::File {
         media_type: object
             .get("media_type")
@@ -111,16 +129,50 @@ fn value_to_file_or_unknown(value: &Value) -> ContentBlock {
             .or_else(|| object.get("name"))
             .and_then(Value::as_str)
             .map(ToString::to_string),
-        url: object
-            .get("url")
-            .or_else(|| object.get("file_url"))
-            .and_then(Value::as_str)
-            .map(ToString::to_string),
-        data: object
-            .get("data")
-            .or_else(|| object.get("file_data"))
-            .and_then(Value::as_str)
-            .map(ToString::to_string),
+        url,
+        data,
         extensions,
+    }
+}
+
+fn is_http_url(value: &str) -> bool {
+    value.starts_with("http://") || value.starts_with("https://")
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use crate::schema::openai::OpenAiContent;
+    use crate::ContentBlock;
+
+    use super::openai_content_to_blocks;
+
+    #[test]
+    fn decodes_openrouter_file_data_url_as_file_url() {
+        let blocks =
+            openai_content_to_blocks(Some(&OpenAiContent::Parts(vec![serde_json::from_value(
+                json!({
+                    "type": "file",
+                    "file": {
+                        "filename": "paper.pdf",
+                        "fileData": "https://example.test/paper.pdf"
+                    }
+                }),
+            )
+            .unwrap()])));
+
+        let ContentBlock::File {
+            filename,
+            url,
+            data,
+            ..
+        } = &blocks[0]
+        else {
+            panic!("file part should decode as file");
+        };
+        assert_eq!(filename.as_deref(), Some("paper.pdf"));
+        assert_eq!(url.as_deref(), Some("https://example.test/paper.pdf"));
+        assert_eq!(data, &None);
     }
 }

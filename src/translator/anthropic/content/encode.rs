@@ -3,7 +3,7 @@ use serde_json::Value;
 use crate::schema::anthropic;
 use crate::ContentBlock;
 
-use super::media::anthropic_image_source;
+use super::media::{anthropic_file_source, anthropic_image_source};
 
 pub(crate) fn block_to_anthropic_block(block: &ContentBlock) -> anthropic::AnthropicContentBlock {
     let mut content_block = anthropic::AnthropicContentBlock {
@@ -72,13 +72,31 @@ pub(crate) fn block_to_anthropic_block(block: &ContentBlock) -> anthropic::Anthr
             content_block.thinking = text.clone();
             content_block.signature = encrypted.clone();
         }
-        ContentBlock::File { .. } | ContentBlock::Unknown { .. } => {
-            if let ContentBlock::Unknown { raw } = block {
-                if let Ok(raw_block) =
-                    serde_json::from_value::<anthropic::AnthropicContentBlock>(raw.clone())
-                {
-                    return raw_block;
-                }
+        ContentBlock::File {
+            media_type,
+            filename,
+            url,
+            data,
+            extensions,
+        } => {
+            content_block.kind = "document".to_string();
+            content_block.source = Some(anthropic_file_source(
+                media_type.as_deref(),
+                url.as_deref(),
+                data.as_deref(),
+                extensions,
+            ));
+            if let Some(filename) = filename {
+                content_block
+                    .extra
+                    .insert("title".to_string(), Value::String(filename.clone()));
+            }
+        }
+        ContentBlock::Unknown { raw } => {
+            if let Ok(raw_block) =
+                serde_json::from_value::<anthropic::AnthropicContentBlock>(raw.clone())
+            {
+                return raw_block;
             }
             content_block.kind = "unknown".to_string();
             content_block.extra.insert(
