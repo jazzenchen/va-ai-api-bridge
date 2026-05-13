@@ -172,6 +172,10 @@ pub(super) fn encode(request: &UniversalRequest) -> Result<Value> {
         &mut pending_tool_reasoning_content,
     )?;
 
+    for message in &mut messages {
+        ensure_chat_message_content(message);
+    }
+
     body.insert("messages".to_string(), Value::Array(messages));
     Ok(Value::Object(body))
 }
@@ -317,13 +321,12 @@ fn message_value(
 ) -> Result<Value> {
     let mut message = Map::new();
     message.insert("role".to_string(), Value::String(role.to_string()));
-    if let Some(content) = content {
-        message.insert(
-            "content".to_string(),
-            serde_json::to_value(content)
-                .map_err(|error| ApiProxyError::conversion(error.to_string()))?,
-        );
-    }
+    let content = match content {
+        Some(content) => serde_json::to_value(content)
+            .map_err(|error| ApiProxyError::conversion(error.to_string()))?,
+        None => Value::String(String::new()),
+    };
+    message.insert("content".to_string(), content);
     if let Some(tool_call_id) = tool_call_id {
         message.insert(
             "tool_call_id".to_string(),
@@ -334,6 +337,15 @@ fn message_value(
         message.insert("tool_calls".to_string(), Value::Array(tool_calls));
     }
     Ok(Value::Object(message))
+}
+
+fn ensure_chat_message_content(message: &mut Value) {
+    let Some(object) = message.as_object_mut() else {
+        return;
+    };
+    object
+        .entry("content".to_string())
+        .or_insert_with(|| Value::String(String::new()));
 }
 
 fn chat_tool_call_value(id: &str, name: &str, arguments: &Value) -> Value {
@@ -400,7 +412,10 @@ mod tests {
     use serde_json::json;
 
     use super::{decode, encode};
-    use crate::{ContentBlock, Role, UniversalItem, UniversalRequest};
+    use crate::{
+        ContentBlock, OpenAiResponsesTranslator, Role, UniversalItem, UniversalRequest,
+        WireTranslator,
+    };
 
     #[test]
     fn preserves_reasoning_content_on_assistant_tool_call_messages() {
@@ -501,6 +516,28 @@ mod tests {
         assert_eq!(messages[0]["tool_calls"][0]["id"], "call_pwd");
         assert_eq!(messages[1]["role"], "tool");
         assert_eq!(messages[1]["tool_call_id"], "call_pwd");
+    }
+
+    #[test]
+    fn encodes_assistant_tool_calls_with_required_content_field() {
+        let request = UniversalRequest {
+            model: Some("chat-model".to_string()),
+            input: vec![UniversalItem::ToolCall {
+                id: "call_pwd".to_string(),
+                name: "exec_command".to_string(),
+                arguments: json!({ "cmd": "pwd" }),
+                extensions: Default::default(),
+            }],
+            ..UniversalRequest::default()
+        };
+
+        let encoded = encode(&request).expect("request encodes");
+
+        let messages = encoded["messages"].as_array().unwrap();
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0]["role"], "assistant");
+        assert_eq!(messages[0]["content"], "");
+        assert_eq!(messages[0]["tool_calls"][0]["id"], "call_pwd");
     }
 
     #[test]
@@ -618,6 +655,35 @@ mod tests {
     }
 
     #[test]
+    fn responses_input_image_encodes_as_chat_image_url() {
+        let universal = OpenAiResponsesTranslator
+            .decode_request(json!({
+                "model": "qwen3.6-plus",
+                "input": [{
+                    "type": "message",
+                    "role": "user",
+                    "content": [
+                        { "type": "input_text", "text": "What is in this image?" },
+                        {
+                            "type": "input_image",
+                            "image_url": "data:image/png;base64,abc123"
+                        }
+                    ]
+                }]
+            }))
+            .expect("responses request decodes");
+
+        let encoded = encode(&universal).expect("chat request encodes");
+
+        assert_eq!(encoded["messages"][0]["content"][0]["type"], "text");
+        assert_eq!(encoded["messages"][0]["content"][1]["type"], "image_url");
+        assert_eq!(
+            encoded["messages"][0]["content"][1]["image_url"]["url"],
+            "data:image/png;base64,abc123"
+        );
+    }
+
+    #[test]
     fn drops_unknown_responses_items_in_chat_encoding() {
         let request = UniversalRequest {
             model: Some("chat-model".to_string()),
@@ -648,5 +714,34 @@ mod tests {
         assert_eq!(messages.len(), 1);
         assert_eq!(messages[0]["role"], "user");
         assert_eq!(messages[0]["content"], "Hello");
+    }
+
+    #[test]
+    fn fills_content_on_passthrough_chat_messages_without_content() {
+        let request = UniversalRequest {
+            model: Some("chat-model".to_string()),
+            input: vec![UniversalItem::Unknown {
+                raw: json!({
+                    "role": "assistant",
+                    "tool_calls": [{
+                        "id": "call_123",
+                        "type": "function",
+                        "function": {
+                            "name": "read_file",
+                            "arguments": "{\"path\":\"README.md\"}"
+                        }
+                    }]
+                }),
+            }],
+            ..UniversalRequest::default()
+        };
+
+        let encoded = encode(&request).expect("request encodes");
+
+        let messages = encoded["messages"].as_array().unwrap();
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0]["role"], "assistant");
+        assert_eq!(messages[0]["content"], "");
+        assert_eq!(messages[0]["tool_calls"][0]["id"], "call_123");
     }
 }
