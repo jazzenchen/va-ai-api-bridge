@@ -13,6 +13,8 @@ pub enum WireProtocol {
     OpenAiChat,
     #[serde(rename = "anthropic-messages")]
     AnthropicMessages,
+    #[serde(rename = "gemini-generate-content")]
+    GeminiGenerateContent,
 }
 
 impl WireProtocol {
@@ -21,6 +23,7 @@ impl WireProtocol {
             Self::OpenAiResponses => "openai-responses",
             Self::OpenAiChat => "openai-chat",
             Self::AnthropicMessages => "anthropic-messages",
+            Self::GeminiGenerateContent => "gemini-generate-content",
         }
     }
 }
@@ -39,6 +42,7 @@ impl FromStr for WireProtocol {
             "openai-responses" => Ok(Self::OpenAiResponses),
             "openai-chat" => Ok(Self::OpenAiChat),
             "anthropic-messages" => Ok(Self::AnthropicMessages),
+            "gemini-generate-content" => Ok(Self::GeminiGenerateContent),
             other => Err(ApiProxyError::unsupported_protocol(other)),
         }
     }

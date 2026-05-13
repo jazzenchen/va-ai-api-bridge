@@ -1,6 +1,7 @@
 mod anthropic;
 pub mod anthropic_messages;
 mod common;
+pub mod gemini_generate_content;
 mod openai;
 pub mod openai_chat;
 pub mod openai_responses;
@@ -11,6 +12,7 @@ use serde_json::Value;
 use crate::{DecodeState, EncodeState, Result, UniversalEvent, UniversalRequest, WireProtocol};
 
 pub use anthropic_messages::AnthropicMessagesTranslator;
+pub use gemini_generate_content::GeminiGenerateContentTranslator;
 pub use openai_chat::OpenAiChatTranslator;
 pub use openai_responses::OpenAiResponsesTranslator;
 
