@@ -1,0 +1,189 @@
+use serde_json::json;
+
+use crate::{
+    ContentBlock, EncodeState, FinishReason, Role, UniversalEvent, UniversalItem, WireTranslator,
+};
+
+use super::{encode_response, GeminiGenerateContentTranslator};
+
+#[test]
+fn decodes_generate_content_request() {
+    let mut body = json!({
+        "contents": [
+            {
+                "role": "user",
+                "parts": [{ "text": "hello" }]
+            },
+            {
+                "role": "model",
+                "parts": [
+                    { "thought": true, "text": "Need to inspect cwd.", "thoughtSignature": "sig_123" },
+                    { "functionCall": { "id": "call_pwd", "name": "exec_command", "args": { "cmd": "pwd" } } }
+                ]
+            },
+            {
+                "role": "user",
+                "parts": [{
+                    "functionResponse": {
+                        "id": "call_pwd",
+                        "name": "exec_command",
+                        "response": { "output": "/tmp/project" }
+                    }
+                }]
+            }
+        ],
+        "generationConfig": { "maxOutputTokens": 32 }
+    });
+    super::attach_route_metadata(&mut body, "gemini-2.5-flash", false);
+
+    let request = GeminiGenerateContentTranslator
+        .decode_request(body)
+        .unwrap();
+
+    assert_eq!(request.model.as_deref(), Some("gemini-2.5-flash"));
+    assert!(!request.stream);
+    assert_eq!(request.generation.max_output_tokens, Some(32));
+    assert!(matches!(
+        request.input.first(),
+        Some(UniversalItem::Message {
+            role: Role::User,
+            ..
+        })
+    ));
+    assert!(matches!(
+        request.input.get(1),
+        Some(UniversalItem::Message {
+            role: Role::Assistant,
+            content,
+            ..
+        }) if matches!(
+            content.first(),
+            Some(ContentBlock::Reasoning {
+                text: Some(text),
+                encrypted: Some(signature),
+                ..
+            }) if text == "Need to inspect cwd." && signature == "sig_123"
+        )
+    ));
+    assert!(matches!(
+        request.input.get(2),
+        Some(UniversalItem::ToolCall {
+            id,
+            name,
+            arguments,
+            ..
+        }) if id == "call_pwd"
+            && name == "exec_command"
+            && arguments["cmd"] == "pwd"
+    ));
+    assert!(matches!(
+        request.input.get(3),
+        Some(UniversalItem::ToolResult {
+            tool_call_id,
+            ..
+        }) if tool_call_id == "call_pwd"
+    ));
+}
+
+#[test]
+fn encodes_gemini_completion_response() {
+    let events = GeminiGenerateContentTranslator
+        .decode_response(json!({
+            "candidates": [{
+                "content": { "role": "model", "parts": [{ "text": "pong" }] },
+                "finishReason": "STOP"
+            }],
+            "usageMetadata": {
+                "promptTokenCount": 1,
+                "candidatesTokenCount": 1,
+                "totalTokenCount": 2
+            }
+        }))
+        .unwrap();
+
+    let response = encode_response(&events);
+
+    assert_eq!(
+        response["candidates"][0]["content"]["parts"][0]["text"],
+        "pong"
+    );
+    assert_eq!(response["candidates"][0]["finishReason"], "STOP");
+    assert_eq!(response["usageMetadata"]["totalTokenCount"], 2);
+}
+
+#[test]
+fn encodes_reasoning_as_gemini_thought_part() {
+    let events = GeminiGenerateContentTranslator
+        .decode_response(json!({
+            "candidates": [{
+                "content": {
+                    "role": "model",
+                    "parts": [
+                        { "thought": true, "text": "I should inspect cwd." },
+                        { "functionCall": { "id": "call_pwd", "name": "exec_command", "args": { "cmd": "pwd" } } }
+                    ]
+                },
+                "finishReason": "MALFORMED_FUNCTION_CALL"
+            }]
+        }))
+        .unwrap();
+
+    let response = encode_response(&events);
+
+    assert_eq!(
+        response["candidates"][0]["content"]["parts"][0]["thought"],
+        true
+    );
+    assert_eq!(
+        response["candidates"][0]["content"]["parts"][0]["text"],
+        "I should inspect cwd."
+    );
+    assert_eq!(
+        response["candidates"][0]["content"]["parts"][1]["functionCall"]["id"],
+        "call_pwd"
+    );
+    assert_eq!(
+        response["candidates"][0]["content"]["parts"][1]["functionCall"]["name"],
+        "exec_command"
+    );
+    assert_eq!(response["candidates"][0]["finishReason"], "STOP");
+}
+
+#[test]
+fn stream_encoder_buffers_tool_call_until_arguments_are_complete() {
+    let mut state = EncodeState::default();
+    let events = vec![
+        UniversalEvent::ToolCallDelta {
+            id: "call_pwd".to_string(),
+            name: Some("exec_command".to_string()),
+            arguments_delta: String::new(),
+        },
+        UniversalEvent::ToolCallDelta {
+            id: "call_pwd".to_string(),
+            name: None,
+            arguments_delta: "{\"cmd\"".to_string(),
+        },
+        UniversalEvent::ToolCallDelta {
+            id: "call_pwd".to_string(),
+            name: None,
+            arguments_delta: ":\"pwd\"}".to_string(),
+        },
+        UniversalEvent::MessageDone {
+            finish_reason: Some(FinishReason::ToolCall),
+            usage: None,
+            extensions: Default::default(),
+        },
+    ];
+
+    let wire = GeminiGenerateContentTranslator
+        .encode_events(&events, &mut state)
+        .unwrap();
+
+    assert_eq!(wire.len(), 1);
+    let candidate = &wire[0].data["candidates"][0];
+    let function_call = &candidate["content"]["parts"][0]["functionCall"];
+    assert_eq!(function_call["id"], "call_pwd");
+    assert_eq!(function_call["name"], "exec_command");
+    assert_eq!(function_call["args"]["cmd"], "pwd");
+    assert_eq!(candidate["finishReason"], "STOP");
+}
