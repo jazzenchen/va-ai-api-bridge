@@ -2,7 +2,7 @@ use serde_json::{json, Map, Value};
 
 use crate::translator::common;
 use crate::{
-    ApiProxyError, ContentBlock, Result, Role, UniversalItem, UniversalRequest, WireProtocol,
+    ApiBridgeError, ContentBlock, Result, Role, UniversalItem, UniversalRequest, WireProtocol,
 };
 
 use super::shared::{
@@ -17,7 +17,7 @@ pub(super) fn decode_request(raw: Value) -> Result<UniversalRequest> {
     let source_raw = raw.clone();
     let object = raw
         .as_object()
-        .ok_or_else(|| ApiProxyError::invalid_request("Gemini request must be a JSON object"))?;
+        .ok_or_else(|| ApiBridgeError::invalid_request("Gemini request must be a JSON object"))?;
     let mut request = UniversalRequest {
         model: object
             .get(VA_MODEL_KEY)

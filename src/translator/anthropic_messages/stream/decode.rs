@@ -2,12 +2,12 @@ use serde_json::Value;
 
 use crate::schema::anthropic::AnthropicStreamEvent;
 use crate::translator::{anthropic, common};
-use crate::{ApiProxyError, DecodeState, Result, Role, UniversalEvent};
+use crate::{ApiBridgeError, DecodeState, Result, Role, UniversalEvent};
 
 pub(super) fn decode_chunk(raw: Value, state: &mut DecodeState) -> Result<Vec<UniversalEvent>> {
     let raw_for_unknown = raw.clone();
     let event: AnthropicStreamEvent = serde_json::from_value(raw)
-        .map_err(|error| ApiProxyError::invalid_response(error.to_string()))?;
+        .map_err(|error| ApiBridgeError::invalid_response(error.to_string()))?;
     let mut events = Vec::new();
     let kind = event.kind.as_deref().unwrap_or_default();
 

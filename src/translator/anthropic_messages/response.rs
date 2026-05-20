@@ -1,10 +1,10 @@
 use crate::schema::anthropic::AnthropicMessagesResponse;
 use crate::translator::{anthropic, common};
-use crate::{ApiProxyError, Result, Role, UniversalEvent};
+use crate::{ApiBridgeError, Result, Role, UniversalEvent};
 
 pub(super) fn decode(raw: serde_json::Value) -> Result<Vec<UniversalEvent>> {
     let response: AnthropicMessagesResponse = serde_json::from_value(raw)
-        .map_err(|error| ApiProxyError::invalid_response(error.to_string()))?;
+        .map_err(|error| ApiBridgeError::invalid_response(error.to_string()))?;
     let usage = anthropic::anthropic_usage_to_universal(response.usage.as_ref());
     let mut events = vec![
         UniversalEvent::ResponseStart {

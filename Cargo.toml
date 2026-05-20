@@ -1,14 +1,16 @@
 [package]
-name = "va-ai-api-proxy"
+name = "va-ai-api-bridge"
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.82"
 description = "Protocol translation primitives for AI API request and response shapes."
 license = "MIT"
-repository = "https://github.com/jazzenchen/va-ai-api-proxy"
+repository = "https://github.com/jazzenchen/va-ai-api-bridge"
 readme = "README.md"
-keywords = ["ai", "api", "proxy", "openai", "anthropic"]
+keywords = ["ai", "api", "bridge", "openai", "anthropic"]
 categories = ["api-bindings", "data-structures"]
+
+[workspace]
 
 [dependencies]
 serde = { version = "1.0", features = ["derive"] }

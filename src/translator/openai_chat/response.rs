@@ -1,10 +1,10 @@
 use crate::schema::openai::{ChatCompletionResponse, ChatToolCall};
 use crate::translator::{common, openai};
-use crate::{ApiProxyError, ContentBlock, Result, Role, UniversalEvent};
+use crate::{ApiBridgeError, ContentBlock, Result, Role, UniversalEvent};
 
 pub(super) fn decode(raw: serde_json::Value) -> Result<Vec<UniversalEvent>> {
     let response: ChatCompletionResponse = serde_json::from_value(raw)
-        .map_err(|error| ApiProxyError::invalid_response(error.to_string()))?;
+        .map_err(|error| ApiBridgeError::invalid_response(error.to_string()))?;
     let usage = openai::openai_usage_to_universal(response.usage.as_ref());
     let mut events = vec![UniversalEvent::ResponseStart {
         id: response.id.clone(),

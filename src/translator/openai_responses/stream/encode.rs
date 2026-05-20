@@ -431,7 +431,7 @@ fn response_message_id(state: &EncodeState) -> String {
         .extensions
         .get("responseId")
         .and_then(Value::as_str)
-        .unwrap_or("resp_va_proxy");
+        .unwrap_or("resp_va_bridge");
     if id.starts_with("msg_") {
         id.to_string()
     } else {
@@ -462,7 +462,7 @@ fn response_reasoning_id(state: &EncodeState) -> String {
         .extensions
         .get("responseId")
         .and_then(Value::as_str)
-        .unwrap_or("resp_va_proxy");
+        .unwrap_or("resp_va_bridge");
     if id.starts_with("rs_") {
         id.to_string()
     } else {
@@ -513,7 +513,7 @@ fn response_shell(state: &EncodeState, status: &str, usage: Option<&crate::Usage
         .extensions
         .get("responseId")
         .and_then(Value::as_str)
-        .unwrap_or("resp_va_proxy");
+        .unwrap_or("resp_va_bridge");
     let model = state
         .extensions
         .get("responseModel")

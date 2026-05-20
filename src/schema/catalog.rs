@@ -3,7 +3,7 @@ use serde_json::Value;
 
 use crate::{Extensions, GenerationConfig, ReasoningConfig, WireProtocol};
 
-pub const PROVIDER_CATALOG_SCHEMA_VERSION: &str = "va.ai.api.proxy.catalog.v1";
+pub const PROVIDER_CATALOG_SCHEMA_VERSION: &str = "va.ai.api.bridge.catalog.v1";
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

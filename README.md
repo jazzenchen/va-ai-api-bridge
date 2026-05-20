@@ -1,8 +1,8 @@
-# va-ai-api-proxy
+# va-ai-api-bridge
 
 Protocol translation primitives for AI API request and response shapes.
 
-`va-ai-api-proxy` is intentionally not an HTTP gateway. It does not perform networking, store credentials, manage accounts, retry upstreams, or own chat history. It provides the shared Rust types and traits VibeAround can use to translate between API package shapes such as OpenAI Responses, OpenAI Chat Completions, and Anthropic Messages.
+`va-ai-api-bridge` is intentionally not an HTTP gateway. It does not perform networking, store credentials, manage accounts, retry upstreams, or own chat history. It provides the shared Rust types and traits VibeAround can use to translate between API package shapes such as OpenAI Responses, OpenAI Chat Completions, and Anthropic Messages.
 
 ## Boundary
 
@@ -53,4 +53,4 @@ Provider adapters only transform package shapes:
 
 ## Status
 
-This crate is an early API skeleton. The schema layer is deliberately permissive and keeps unknown fields so providers can evolve without breaking the proxy. Built-in translators cover the common request, response, and stream packet shapes; provider-specific behavior should still live in provider adapters or host code.
+This crate is an early API skeleton. The schema layer is deliberately permissive and keeps unknown fields so providers can evolve without breaking the bridge. Built-in translators cover the common request, response, and stream packet shapes; provider-specific behavior should still live in provider adapters or host code.

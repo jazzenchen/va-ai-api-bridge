@@ -2,7 +2,7 @@ use serde_json::{json, Map, Value};
 
 use crate::translator::common;
 use crate::{
-    ApiProxyError, ContentBlock, Result, Role, UniversalEvent, UniversalItem, UniversalResponse,
+    ApiBridgeError, ContentBlock, Result, Role, UniversalEvent, UniversalItem, UniversalResponse,
 };
 
 use super::shared::{
@@ -66,7 +66,7 @@ pub(super) fn decode_candidates(
     let candidates = raw
         .get("candidates")
         .and_then(Value::as_array)
-        .ok_or_else(|| ApiProxyError::invalid_response("Gemini response missing candidates"))?;
+        .ok_or_else(|| ApiBridgeError::invalid_response("Gemini response missing candidates"))?;
     let Some(candidate) = candidates.first() else {
         return Ok(());
     };
