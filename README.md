@@ -1,8 +1,8 @@
-# va-ai-api-bridge
+# va-ai-api-bridge (VAAAB)
 
 Protocol translation primitives for AI API request and response shapes.
 
-`va-ai-api-bridge` is intentionally not an HTTP gateway. It does not perform networking, store credentials, manage accounts, retry upstreams, or own chat history. It provides the shared Rust types and traits VibeAround can use to translate between API package shapes such as OpenAI Responses, OpenAI Chat Completions, and Anthropic Messages.
+`va-ai-api-bridge` (VAAAB, short for VA AI API Bridge) is intentionally not an HTTP gateway. It does not perform networking, store credentials, manage accounts, retry upstreams, or own chat history. It provides the shared Rust types and traits VibeAround can use to translate between API package shapes such as OpenAI Responses, OpenAI Chat Completions, Anthropic Messages, and Gemini Generate Content.
 
 ## Boundary
 
@@ -50,6 +50,7 @@ Provider adapters only transform package shapes:
 - `OpenAiChatTranslator`: `/v1/chat/completions`
 - `OpenAiResponsesTranslator`: `/v1/responses`
 - `AnthropicMessagesTranslator`: `/v1/messages`
+- `GeminiGenerateContentTranslator`: `/{version}/models/{model}:generateContent`
 
 ## Status
 
