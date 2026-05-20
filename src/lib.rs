@@ -10,9 +10,9 @@ pub mod translator;
 pub mod universal;
 
 pub use adapter::{
-    AdapterStreamState, AdapterStreamStep, ProviderAdapter, ProxyContext, ProxyHistory,
+    AdapterStreamState, AdapterStreamStep, BridgeContext, BridgeHistory, ProviderAdapter,
 };
-pub use error::{ApiProxyError, Result};
+pub use error::{ApiBridgeError, Result};
 pub use protocol::WireProtocol;
 pub use schema::{
     ModelCapabilities, ProviderCatalog, ProviderDefaults, ProviderModel, ProviderProtocol,

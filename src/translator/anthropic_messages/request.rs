@@ -5,13 +5,13 @@ use crate::schema::anthropic::{
 };
 use crate::translator::{anthropic, common};
 use crate::{
-    ApiProxyError, ContentBlock, Result, Role, UniversalItem, UniversalRequest, WireProtocol,
+    ApiBridgeError, ContentBlock, Result, Role, UniversalItem, UniversalRequest, WireProtocol,
 };
 
 pub(super) fn decode(raw: Value) -> Result<UniversalRequest> {
     let source_raw = raw.clone();
     let request: AnthropicMessagesRequest = serde_json::from_value(raw)
-        .map_err(|error| ApiProxyError::invalid_request(error.to_string()))?;
+        .map_err(|error| ApiBridgeError::invalid_request(error.to_string()))?;
 
     let mut universal = UniversalRequest {
         model: request.model,
@@ -186,7 +186,7 @@ pub(super) fn encode(request: &UniversalRequest) -> Result<Value> {
         body.insert(
             "system".to_string(),
             serde_json::to_value(system)
-                .map_err(|error| ApiProxyError::conversion(error.to_string()))?,
+                .map_err(|error| ApiBridgeError::conversion(error.to_string()))?,
         );
     }
     body.insert("messages".to_string(), Value::Array(messages));
@@ -259,7 +259,7 @@ fn anthropic_message_value(role: &str, content: AnthropicContent) -> Result<Valu
     message.insert(
         "content".to_string(),
         serde_json::to_value(content)
-            .map_err(|error| ApiProxyError::conversion(error.to_string()))?,
+            .map_err(|error| ApiBridgeError::conversion(error.to_string()))?,
     );
     Ok(Value::Object(message))
 }

@@ -3,13 +3,13 @@ use serde_json::{json, Map, Value};
 use crate::schema::openai::{ResponsesInput, ResponsesItem, ResponsesRequest};
 use crate::translator::{common, openai};
 use crate::{
-    ApiProxyError, ContentBlock, Result, Role, UniversalItem, UniversalRequest, WireProtocol,
+    ApiBridgeError, ContentBlock, Result, Role, UniversalItem, UniversalRequest, WireProtocol,
 };
 
 pub(super) fn decode(raw: Value) -> Result<UniversalRequest> {
     let source_raw = raw.clone();
     let request: ResponsesRequest = serde_json::from_value(raw)
-        .map_err(|error| ApiProxyError::invalid_request(error.to_string()))?;
+        .map_err(|error| ApiBridgeError::invalid_request(error.to_string()))?;
 
     let mut universal = UniversalRequest {
         model: request.model,
@@ -175,7 +175,7 @@ fn universal_item_to_response_item(item: &UniversalItem) -> Result<Value> {
                 object.insert(
                     "content".to_string(),
                     serde_json::to_value(content)
-                        .map_err(|error| ApiProxyError::conversion(error.to_string()))?,
+                        .map_err(|error| ApiBridgeError::conversion(error.to_string()))?,
                 );
             }
             Ok(Value::Object(object))

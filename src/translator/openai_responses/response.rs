@@ -2,11 +2,11 @@ use serde_json::Value;
 
 use crate::schema::openai::{ResponsesItem, ResponsesResponse};
 use crate::translator::{common, openai};
-use crate::{ApiProxyError, ContentBlock, DecodeState, Result, Role, UniversalEvent};
+use crate::{ApiBridgeError, ContentBlock, DecodeState, Result, Role, UniversalEvent};
 
 pub(super) fn decode(raw: Value) -> Result<Vec<UniversalEvent>> {
     let response: ResponsesResponse = serde_json::from_value(raw)
-        .map_err(|error| ApiProxyError::invalid_response(error.to_string()))?;
+        .map_err(|error| ApiBridgeError::invalid_response(error.to_string()))?;
     let usage = openai::openai_usage_to_universal(response.usage.as_ref());
     let mut events = vec![UniversalEvent::ResponseStart {
         id: response.id.clone(),

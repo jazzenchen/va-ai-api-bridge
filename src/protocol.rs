@@ -3,7 +3,7 @@ use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
 
-use crate::{ApiProxyError, Result};
+use crate::{ApiBridgeError, Result};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum WireProtocol {
@@ -35,7 +35,7 @@ impl fmt::Display for WireProtocol {
 }
 
 impl FromStr for WireProtocol {
-    type Err = ApiProxyError;
+    type Err = ApiBridgeError;
 
     fn from_str(value: &str) -> Result<Self> {
         match value {
@@ -43,7 +43,7 @@ impl FromStr for WireProtocol {
             "openai-chat" => Ok(Self::OpenAiChat),
             "anthropic-messages" => Ok(Self::AnthropicMessages),
             "gemini-generate-content" => Ok(Self::GeminiGenerateContent),
-            other => Err(ApiProxyError::unsupported_protocol(other)),
+            other => Err(ApiBridgeError::unsupported_protocol(other)),
         }
     }
 }

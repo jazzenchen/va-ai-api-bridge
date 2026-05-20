@@ -2,13 +2,13 @@ use serde_json::Value;
 
 use crate::schema::openai::{ChatCompletionChunk, ChatToolCall};
 use crate::translator::{common, openai};
-use crate::{ApiProxyError, ContentBlock, DecodeState, Result, Role, UniversalEvent};
+use crate::{ApiBridgeError, ContentBlock, DecodeState, Result, Role, UniversalEvent};
 
 use super::super::response::response_message_id;
 
 pub(super) fn decode_chunk(raw: Value, state: &mut DecodeState) -> Result<Vec<UniversalEvent>> {
     let chunk: ChatCompletionChunk = serde_json::from_value(raw)
-        .map_err(|error| ApiProxyError::invalid_response(error.to_string()))?;
+        .map_err(|error| ApiBridgeError::invalid_response(error.to_string()))?;
     let mut events = Vec::new();
     common::ensure_response_start(&mut events, state, chunk.id.clone(), chunk.model.clone());
 

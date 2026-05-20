@@ -2,14 +2,14 @@ use serde_json::Value;
 
 use crate::schema::openai::{ResponsesItem, ResponsesStreamEvent};
 use crate::translator::{common, openai};
-use crate::{ApiProxyError, ContentBlock, DecodeState, Result, UniversalEvent};
+use crate::{ApiBridgeError, ContentBlock, DecodeState, Result, UniversalEvent};
 
 use super::super::response::{push_response_item_events, push_response_item_start};
 
 pub(super) fn decode_chunk(raw: Value, state: &mut DecodeState) -> Result<Vec<UniversalEvent>> {
     let raw_for_unknown = raw.clone();
     let event: ResponsesStreamEvent = serde_json::from_value(raw)
-        .map_err(|error| ApiProxyError::invalid_response(error.to_string()))?;
+        .map_err(|error| ApiBridgeError::invalid_response(error.to_string()))?;
     let mut events = Vec::new();
     let kind = event.kind.as_deref().unwrap_or_default();
 

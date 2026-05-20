@@ -1,9 +1,9 @@
 use std::fmt;
 
-pub type Result<T> = std::result::Result<T, ApiProxyError>;
+pub type Result<T> = std::result::Result<T, ApiBridgeError>;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ApiProxyError {
+pub enum ApiBridgeError {
     UnsupportedProtocol { protocol: String },
     InvalidRequest { message: String },
     InvalidResponse { message: String },
@@ -11,7 +11,7 @@ pub enum ApiProxyError {
     Adapter { message: String },
 }
 
-impl ApiProxyError {
+impl ApiBridgeError {
     pub fn unsupported_protocol(protocol: impl Into<String>) -> Self {
         Self::UnsupportedProtocol {
             protocol: protocol.into(),
@@ -43,7 +43,7 @@ impl ApiProxyError {
     }
 }
 
-impl fmt::Display for ApiProxyError {
+impl fmt::Display for ApiBridgeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::UnsupportedProtocol { protocol } => {
@@ -57,4 +57,4 @@ impl fmt::Display for ApiProxyError {
     }
 }
 
-impl std::error::Error for ApiProxyError {}
+impl std::error::Error for ApiBridgeError {}
