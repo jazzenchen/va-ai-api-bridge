@@ -44,6 +44,7 @@ Provider adapters only transform package shapes:
 - `stream`: protocol-neutral streaming event types and translator state
 - `translator`: behavior traits for translating schema/value payloads to and from universal types
 - `adapter`: traits and context for provider-specific package transforms
+- `providers`: built-in provider adapters for common OpenAI-compatible quirks
 
 ## Built-in Translators
 
@@ -54,4 +55,4 @@ Provider adapters only transform package shapes:
 
 ## Status
 
-This crate is an early API skeleton. The schema layer is deliberately permissive and keeps unknown fields so providers can evolve without breaking the bridge. Built-in translators cover the common request, response, and stream packet shapes; provider-specific behavior should still live in provider adapters or host code.
+This crate is an early API skeleton. The schema layer is deliberately permissive and keeps unknown fields so providers can evolve without breaking the bridge. Built-in translators cover the common request, response, and stream packet shapes; built-in provider adapters cover the provider-specific package transforms that can stay independent of host networking, credentials, and profile storage.
