@@ -4,6 +4,7 @@
 pub mod adapter;
 pub mod error;
 pub mod protocol;
+pub mod providers;
 pub mod schema;
 pub mod stream;
 pub mod translator;
@@ -14,6 +15,11 @@ pub use adapter::{
 };
 pub use error::{ApiBridgeError, Result};
 pub use protocol::WireProtocol;
+pub use providers::{
+    DashScopeBridgeAdapter, DeepSeekBridgeAdapter, DeepSeekBridgeSettings, KimiBridgeAdapter,
+    MimoBridgeAdapter, MiniMaxBridgeAdapter, ProviderBridgeAdapter, ProviderBridgeAdapterConfig,
+    ProviderRequestSource, XaiBridgeAdapter, ZaiBridgeAdapter,
+};
 pub use schema::{
     ModelCapabilities, ProviderCatalog, ProviderDefaults, ProviderModel, ProviderProtocol,
     ProviderSetting, SettingKind, SettingOption, PROVIDER_CATALOG_SCHEMA_VERSION,
