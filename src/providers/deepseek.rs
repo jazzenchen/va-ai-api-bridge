@@ -172,6 +172,10 @@ impl DeepSeekBridgeAdapter {
         );
     }
 
+    pub fn prepare_anthropic_request(&mut self, request: &mut Value) {
+        repair_anthropic_thinking_tool_use_order(request);
+    }
+
     fn should_replay_reasoning_content(&self, source: ProviderRequestSource) -> bool {
         self.settings.thinking
             && self.settings.replay_reasoning_content
@@ -188,6 +192,54 @@ impl DeepSeekBridgeAdapter {
         collect_tool_outputs_from_chat_request(chat_request, &mut outputs);
         outputs
     }
+}
+
+fn repair_anthropic_thinking_tool_use_order(request: &mut Value) {
+    let Some(messages) = request.get_mut("messages").and_then(Value::as_array_mut) else {
+        return;
+    };
+
+    for message in messages {
+        if message.get("role").and_then(Value::as_str) != Some("assistant") {
+            continue;
+        }
+        let Some(blocks) = message.get_mut("content").and_then(Value::as_array_mut) else {
+            continue;
+        };
+        move_first_thinking_before_leading_tool_uses(blocks);
+    }
+}
+
+fn move_first_thinking_before_leading_tool_uses(blocks: &mut Vec<Value>) {
+    let Some(thinking_index) = blocks.iter().position(is_anthropic_thinking_block) else {
+        return;
+    };
+    if thinking_index == 0
+        || !blocks[..thinking_index]
+            .iter()
+            .all(is_anthropic_tool_use_block)
+    {
+        return;
+    }
+
+    let thinking = blocks.remove(thinking_index);
+    blocks.insert(0, thinking);
+}
+
+fn is_anthropic_thinking_block(block: &Value) -> bool {
+    anthropic_block_type(block) == Some("thinking")
+        && block
+            .get("thinking")
+            .and_then(Value::as_str)
+            .is_some_and(|thinking| !thinking.is_empty())
+}
+
+fn is_anthropic_tool_use_block(block: &Value) -> bool {
+    anthropic_block_type(block) == Some("tool_use")
+}
+
+fn anthropic_block_type(block: &Value) -> Option<&str> {
+    block.get("type").and_then(Value::as_str)
 }
 
 pub(super) fn repair_tool_call_history(
@@ -1357,6 +1409,69 @@ mod tests {
         assert_eq!(chat_request["messages"][1]["role"], "tool");
         assert_eq!(chat_request["messages"][1]["tool_call_id"], "call_pwd");
         assert_eq!(chat_request["messages"][1]["content"], "/tmp/project");
+    }
+
+    #[test]
+    fn moves_anthropic_thinking_before_deepseek_tool_use_history() {
+        let mut request = json!({
+            "model": "deepseek-v4-pro",
+            "messages": [{
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "id": "call_pwd",
+                        "name": "exec_command",
+                        "input": { "cmd": "pwd" }
+                    },
+                    { "type": "thinking", "thinking": "Call pwd, then answer." }
+                ]
+            }, {
+                "role": "user",
+                "content": [{
+                    "type": "tool_result",
+                    "tool_use_id": "call_pwd",
+                    "content": "/tmp/project"
+                }]
+            }]
+        });
+        let mut adapter = DeepSeekBridgeAdapter::new(DeepSeekBridgeSettings::default());
+
+        adapter.prepare_anthropic_request(&mut request);
+
+        let content = request["messages"][0]["content"].as_array().unwrap();
+        assert_eq!(content[0]["type"], "thinking");
+        assert_eq!(content[0]["thinking"], "Call pwd, then answer.");
+        assert_eq!(content[1]["type"], "tool_use");
+        assert_eq!(content[1]["id"], "call_pwd");
+    }
+
+    #[test]
+    fn does_not_move_anthropic_thinking_across_text_blocks() {
+        let mut request = json!({
+            "model": "deepseek-v4-pro",
+            "messages": [{
+                "role": "assistant",
+                "content": [
+                    { "type": "text", "text": "I will inspect the workspace." },
+                    {
+                        "type": "tool_use",
+                        "id": "call_pwd",
+                        "name": "exec_command",
+                        "input": { "cmd": "pwd" }
+                    },
+                    { "type": "thinking", "thinking": "Call pwd, then answer." }
+                ]
+            }]
+        });
+        let mut adapter = DeepSeekBridgeAdapter::new(DeepSeekBridgeSettings::default());
+
+        adapter.prepare_anthropic_request(&mut request);
+
+        let content = request["messages"][0]["content"].as_array().unwrap();
+        assert_eq!(content[0]["type"], "text");
+        assert_eq!(content[1]["type"], "tool_use");
+        assert_eq!(content[2]["type"], "thinking");
     }
 
     fn thinking_settings() -> DeepSeekBridgeSettings {
