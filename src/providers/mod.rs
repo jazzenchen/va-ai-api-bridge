@@ -143,7 +143,7 @@ impl ProviderBridgeAdapter {
     pub fn prepare_anthropic_request(&mut self, request: &mut Value) {
         match self {
             Self::None => {}
-            Self::DeepSeek(_) => {}
+            Self::DeepSeek(adapter) => adapter.prepare_anthropic_request(request),
             Self::Kimi(adapter) => adapter.prepare_anthropic_request(request),
             Self::Mimo(_) => {}
             Self::MiniMax(_) => {}
