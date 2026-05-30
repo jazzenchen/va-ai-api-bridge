@@ -88,7 +88,7 @@ pub(super) fn encode(request: &UniversalRequest) -> Result<Value> {
 
     let mut system_blocks = request.instructions.clone();
     let mut messages = Vec::new();
-    let mut pending_assistant_blocks = Vec::new();
+    let mut pending_assistant_blocks = PendingAssistantBlocks::default();
     let mut pending_tool_results = Vec::new();
     for item in &request.input {
         match item {
@@ -98,15 +98,11 @@ pub(super) fn encode(request: &UniversalRequest) -> Result<Value> {
                 }
                 if *role == Role::Assistant {
                     flush_anthropic_blocks(&mut messages, "user", &mut pending_tool_results)?;
-                    pending_assistant_blocks.extend(anthropic_blocks(content));
+                    pending_assistant_blocks.push_blocks(anthropic_blocks(content));
                 } else if matches!(role, Role::Developer | Role::System) {
                     system_blocks.extend(content.iter().cloned());
                 } else {
-                    flush_anthropic_blocks(
-                        &mut messages,
-                        "assistant",
-                        &mut pending_assistant_blocks,
-                    )?;
+                    flush_pending_assistant_blocks(&mut messages, &mut pending_assistant_blocks)?;
                     if *role == Role::User && !pending_tool_results.is_empty() {
                         pending_tool_results.extend(anthropic_blocks(content));
                         flush_anthropic_blocks(&mut messages, "user", &mut pending_tool_results)?;
@@ -132,7 +128,7 @@ pub(super) fn encode(request: &UniversalRequest) -> Result<Value> {
                     extensions: common::empty_extensions(),
                 };
                 flush_anthropic_blocks(&mut messages, "user", &mut pending_tool_results)?;
-                pending_assistant_blocks.push(anthropic::block_to_anthropic_block(&block));
+                pending_assistant_blocks.push_tool_use(anthropic::block_to_anthropic_block(&block));
             }
             UniversalItem::ToolResult {
                 tool_call_id,
@@ -146,7 +142,7 @@ pub(super) fn encode(request: &UniversalRequest) -> Result<Value> {
                     is_error: *is_error,
                     extensions: common::empty_extensions(),
                 };
-                flush_anthropic_blocks(&mut messages, "assistant", &mut pending_assistant_blocks)?;
+                flush_pending_assistant_blocks(&mut messages, &mut pending_assistant_blocks)?;
                 pending_tool_results.push(anthropic::block_to_anthropic_block(&block));
             }
             UniversalItem::Reasoning {
@@ -158,7 +154,7 @@ pub(super) fn encode(request: &UniversalRequest) -> Result<Value> {
                         .as_deref()
                         .is_some_and(|encrypted| !encrypted.is_empty())
                 {
-                    pending_assistant_blocks.push(AnthropicContentBlock {
+                    pending_assistant_blocks.push_non_tool(AnthropicContentBlock {
                         kind: "thinking".to_string(),
                         text: None,
                         source: None,
@@ -174,13 +170,13 @@ pub(super) fn encode(request: &UniversalRequest) -> Result<Value> {
                 }
             }
             UniversalItem::Unknown { raw } => {
-                flush_anthropic_blocks(&mut messages, "assistant", &mut pending_assistant_blocks)?;
+                flush_pending_assistant_blocks(&mut messages, &mut pending_assistant_blocks)?;
                 flush_anthropic_blocks(&mut messages, "user", &mut pending_tool_results)?;
                 messages.push(raw.clone());
             }
         }
     }
-    flush_anthropic_blocks(&mut messages, "assistant", &mut pending_assistant_blocks)?;
+    flush_pending_assistant_blocks(&mut messages, &mut pending_assistant_blocks)?;
     flush_anthropic_blocks(&mut messages, "user", &mut pending_tool_results)?;
     if let Some(system) = anthropic::blocks_to_anthropic_system(&system_blocks) {
         body.insert(
@@ -271,6 +267,42 @@ fn anthropic_blocks(blocks: &[ContentBlock]) -> Vec<AnthropicContentBlock> {
         .collect()
 }
 
+#[derive(Default)]
+struct PendingAssistantBlocks {
+    prefix: Vec<AnthropicContentBlock>,
+    tool_uses: Vec<AnthropicContentBlock>,
+}
+
+impl PendingAssistantBlocks {
+    fn is_empty(&self) -> bool {
+        self.prefix.is_empty() && self.tool_uses.is_empty()
+    }
+
+    fn push_blocks(&mut self, blocks: Vec<AnthropicContentBlock>) {
+        for block in blocks {
+            if block.kind == "tool_use" {
+                self.tool_uses.push(block);
+            } else {
+                self.prefix.push(block);
+            }
+        }
+    }
+
+    fn push_tool_use(&mut self, block: AnthropicContentBlock) {
+        self.tool_uses.push(block);
+    }
+
+    fn push_non_tool(&mut self, block: AnthropicContentBlock) {
+        self.prefix.push(block);
+    }
+
+    fn take_ordered(&mut self) -> Vec<AnthropicContentBlock> {
+        let mut blocks = std::mem::take(&mut self.prefix);
+        blocks.extend(std::mem::take(&mut self.tool_uses));
+        blocks
+    }
+}
+
 fn is_empty_message_content(content: &[ContentBlock]) -> bool {
     content.iter().all(|block| match block {
         ContentBlock::Text { text } => text.trim().is_empty(),
@@ -295,6 +327,20 @@ fn flush_anthropic_blocks(
     messages.push(anthropic_message_value(
         role,
         AnthropicContent::Blocks(std::mem::take(blocks)),
+    )?);
+    Ok(())
+}
+
+fn flush_pending_assistant_blocks(
+    messages: &mut Vec<Value>,
+    blocks: &mut PendingAssistantBlocks,
+) -> Result<()> {
+    if blocks.is_empty() {
+        return Ok(());
+    }
+    messages.push(anthropic_message_value(
+        "assistant",
+        AnthropicContent::Blocks(blocks.take_ordered()),
     )?);
     Ok(())
 }
@@ -423,6 +469,90 @@ mod tests {
         assert_eq!(messages[0]["content"][0]["type"], "text");
         assert_eq!(messages[0]["content"][1]["type"], "tool_use");
         assert_eq!(messages[1]["content"][0]["type"], "tool_result");
+    }
+
+    #[test]
+    fn moves_assistant_text_after_tool_use_before_tool_use() {
+        let request = UniversalRequest {
+            model: Some("minimax".to_string()),
+            input: vec![
+                UniversalItem::ToolCall {
+                    id: "call_1".to_string(),
+                    name: "list_files".to_string(),
+                    arguments: json!({ "path": "." }),
+                    extensions: Default::default(),
+                },
+                UniversalItem::Message {
+                    role: Role::Assistant,
+                    id: None,
+                    content: vec![ContentBlock::Text {
+                        text: "I will inspect the project.".to_string(),
+                    }],
+                    extensions: Default::default(),
+                },
+                UniversalItem::ToolResult {
+                    tool_call_id: "call_1".to_string(),
+                    content: vec![ContentBlock::Text {
+                        text: "Cargo.toml".to_string(),
+                    }],
+                    is_error: false,
+                    extensions: Default::default(),
+                },
+            ],
+            ..UniversalRequest::default()
+        };
+
+        let encoded = encode(&request).expect("request encodes");
+        let messages = encoded["messages"].as_array().unwrap();
+
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[0]["role"], "assistant");
+        assert_eq!(messages[0]["content"][0]["type"], "text");
+        assert_eq!(messages[0]["content"][1]["type"], "tool_use");
+        assert_eq!(messages[1]["role"], "user");
+        assert_eq!(messages[1]["content"][0]["type"], "tool_result");
+        assert_eq!(messages[1]["content"][0]["tool_use_id"], "call_1");
+    }
+
+    #[test]
+    fn moves_reasoning_after_tool_use_before_tool_use() {
+        let request = UniversalRequest {
+            model: Some("minimax".to_string()),
+            input: vec![
+                UniversalItem::ToolCall {
+                    id: "call_1".to_string(),
+                    name: "list_files".to_string(),
+                    arguments: json!({ "path": "." }),
+                    extensions: Default::default(),
+                },
+                UniversalItem::Reasoning {
+                    id: None,
+                    text: Some("Need to inspect files.".to_string()),
+                    encrypted: None,
+                    extensions: Default::default(),
+                },
+                UniversalItem::ToolResult {
+                    tool_call_id: "call_1".to_string(),
+                    content: vec![ContentBlock::Text {
+                        text: "Cargo.toml".to_string(),
+                    }],
+                    is_error: false,
+                    extensions: Default::default(),
+                },
+            ],
+            ..UniversalRequest::default()
+        };
+
+        let encoded = encode(&request).expect("request encodes");
+        let messages = encoded["messages"].as_array().unwrap();
+
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[0]["role"], "assistant");
+        assert_eq!(messages[0]["content"][0]["type"], "thinking");
+        assert_eq!(messages[0]["content"][1]["type"], "tool_use");
+        assert_eq!(messages[1]["role"], "user");
+        assert_eq!(messages[1]["content"][0]["type"], "tool_result");
+        assert_eq!(messages[1]["content"][0]["tool_use_id"], "call_1");
     }
 
     #[test]
