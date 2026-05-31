@@ -109,8 +109,9 @@ pub(super) fn generation_from_gemini(value: Option<&Value>) -> GenerationConfig 
     };
     GenerationConfig {
         temperature: object.get("temperature").and_then(Value::as_f64),
-        top_p: object.get("topP").and_then(Value::as_f64),
-        max_output_tokens: object.get("maxOutputTokens").and_then(Value::as_u64),
+        top_p: field(object, "topP", "top_p").and_then(Value::as_f64),
+        max_output_tokens: field(object, "maxOutputTokens", "max_output_tokens")
+            .and_then(Value::as_u64),
         extensions: common::empty_extensions(),
     }
 }
@@ -136,6 +137,7 @@ pub(super) fn decode_tools(value: Option<&Value>) -> Vec<UniversalTool> {
         .flatten()
         .flat_map(|tool| {
             tool.get("functionDeclarations")
+                .or_else(|| tool.get("function_declarations"))
                 .and_then(Value::as_array)
                 .into_iter()
                 .flatten()
@@ -172,11 +174,15 @@ pub(super) fn tools_to_gemini(tools: &[UniversalTool]) -> Value {
 }
 
 pub(super) fn decode_tool_choice(value: Option<&Value>) -> Option<ToolChoice> {
-    let config = value?.get("functionCallingConfig")?;
+    let value = value?;
+    let config = value
+        .get("functionCallingConfig")
+        .or_else(|| value.get("function_calling_config"))?;
     match config.get("mode").and_then(Value::as_str) {
         Some("NONE") => Some(ToolChoice::None),
         Some("ANY") => config
             .get("allowedFunctionNames")
+            .or_else(|| config.get("allowed_function_names"))
             .and_then(Value::as_array)
             .and_then(|names| names.first())
             .and_then(Value::as_str)
@@ -201,12 +207,11 @@ pub(super) fn tool_choice_to_gemini(tool_choice: &ToolChoice) -> Value {
 }
 
 pub(super) fn gemini_parts_to_blocks(value: &Value) -> Vec<ContentBlock> {
-    value
-        .as_array()
-        .into_iter()
-        .flatten()
-        .flat_map(gemini_part_to_blocks)
-        .collect()
+    match value {
+        Value::Array(parts) => parts.iter().flat_map(gemini_part_to_blocks).collect(),
+        Value::Object(_) => gemini_part_to_blocks(value),
+        _ => Vec::new(),
+    }
 }
 
 pub(super) fn gemini_part_to_blocks(part: &Value) -> Vec<ContentBlock> {
@@ -255,7 +260,10 @@ pub(super) fn gemini_part_to_blocks(part: &Value) -> Vec<ContentBlock> {
             .map(ToOwned::to_owned);
         return vec![data_block(media_type, url, None)];
     }
-    if let Some(function_call) = part.get("functionCall") {
+    if let Some(function_call) = part
+        .get("functionCall")
+        .or_else(|| part.get("function_call"))
+    {
         let name = function_call
             .get("name")
             .and_then(Value::as_str)
@@ -451,4 +459,12 @@ fn data_block(
             extensions: common::empty_extensions(),
         }
     }
+}
+
+pub(super) fn field<'a>(
+    object: &'a Map<String, Value>,
+    camel_case: &str,
+    snake_case: &str,
+) -> Option<&'a Value> {
+    object.get(camel_case).or_else(|| object.get(snake_case))
 }

@@ -86,6 +86,42 @@ fn decodes_generate_content_request() {
 }
 
 #[test]
+fn decodes_snake_case_generate_content_request() {
+    let mut body = json!({
+        "system_instruction": { "parts": { "text": "Be concise." } },
+        "contents": {
+            "role": "user",
+            "parts": { "text": "hello" }
+        },
+        "generation_config": { "max_output_tokens": 32, "top_p": 0.9 },
+        "tools": [{
+            "function_declarations": [{
+                "name": "lookup",
+                "parameters": { "type": "object" }
+            }]
+        }],
+        "tool_config": {
+            "function_calling_config": {
+                "mode": "ANY",
+                "allowed_function_names": ["lookup"]
+            }
+        }
+    });
+    super::attach_route_metadata(&mut body, "models/gemini-2.5-flash", true);
+
+    let request = GeminiGenerateContentTranslator
+        .decode_request(body)
+        .unwrap();
+
+    assert_eq!(request.model.as_deref(), Some("gemini-2.5-flash"));
+    assert!(request.stream);
+    assert_eq!(request.instructions.len(), 1);
+    assert_eq!(request.generation.max_output_tokens, Some(32));
+    assert_eq!(request.generation.top_p, Some(0.9));
+    assert_eq!(request.tools[0].name, "lookup");
+}
+
+#[test]
 fn encodes_gemini_completion_response() {
     let events = GeminiGenerateContentTranslator
         .decode_response(json!({
