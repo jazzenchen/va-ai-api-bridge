@@ -1,4 +1,3 @@
-
 use crate::{ContentBlock, EncodeState, UniversalEvent};
 
 use super::*;
