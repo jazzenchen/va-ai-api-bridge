@@ -1,4 +1,3 @@
-
 use serde_json::json;
 
 use super::super::reasoning_blob::encode_reasoning_content;
