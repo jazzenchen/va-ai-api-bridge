@@ -35,7 +35,8 @@ pub(super) fn decode_chunk(raw: Value, state: &mut DecodeState) -> Result<Vec<Un
         }
         "response.content_part.added" => {
             let output_index = event.output_index.unwrap_or(0);
-            let index = event.content_index.unwrap_or(output_index);
+            let content_index = event.content_index.unwrap_or(0);
+            let index = response_content_index(state, output_index, content_index);
             mark_streamed_output(state, output_index);
             if let Some(item) = event.item {
                 let blocks = item
@@ -51,7 +52,8 @@ pub(super) fn decode_chunk(raw: Value, state: &mut DecodeState) -> Result<Vec<Un
         }
         "response.output_text.delta" => {
             let output_index = event.output_index.unwrap_or(0);
-            let index = event.content_index.unwrap_or(output_index);
+            let content_index = event.content_index.unwrap_or(0);
+            let index = response_content_index(state, output_index, content_index);
             mark_streamed_output(state, output_index);
             mark_text_delta(state, index);
             common::ensure_content_start(
@@ -69,7 +71,8 @@ pub(super) fn decode_chunk(raw: Value, state: &mut DecodeState) -> Result<Vec<Un
         }
         "response.output_text.done" => {
             let output_index = event.output_index.unwrap_or(0);
-            let index = event.content_index.unwrap_or(output_index);
+            let content_index = event.content_index.unwrap_or(0);
+            let index = response_content_index(state, output_index, content_index);
             mark_streamed_output(state, output_index);
             if !has_text_delta(state, index) {
                 common::ensure_content_start(
@@ -87,8 +90,11 @@ pub(super) fn decode_chunk(raw: Value, state: &mut DecodeState) -> Result<Vec<Un
             }
         }
         "response.reasoning_text.delta" | "response.reasoning.delta" => {
+            let output_index = event.output_index.unwrap_or(0);
+            let content_index = event.content_index.unwrap_or(0);
+            let index = response_content_index(state, output_index, content_index);
             events.push(UniversalEvent::ReasoningDelta {
-                index: event.content_index.or(event.output_index).unwrap_or(0),
+                index,
                 text: value_to_string(event.delta.as_ref()),
             });
         }
@@ -154,7 +160,8 @@ pub(super) fn decode_chunk(raw: Value, state: &mut DecodeState) -> Result<Vec<Un
         }
         "response.content_part.done" => {
             let output_index = event.output_index.unwrap_or(0);
-            let index = event.content_index.unwrap_or(output_index);
+            let content_index = event.content_index.unwrap_or(0);
+            let index = response_content_index(state, output_index, content_index);
             mark_streamed_output(state, output_index);
             push_content_done_once(
                 &mut events,
@@ -219,6 +226,35 @@ fn value_to_string(value: Option<&Value>) -> String {
         Some(value) => common::stringify_arguments(value),
         None => String::new(),
     }
+}
+
+fn response_content_index(
+    state: &mut DecodeState,
+    output_index: usize,
+    content_index: usize,
+) -> usize {
+    let key = format!("responses_content_index:{output_index}:{content_index}");
+    if let Some(index) = state.extensions.get(&key).and_then(Value::as_u64) {
+        return index as usize;
+    }
+    let index = next_response_content_index(state);
+    state
+        .extensions
+        .insert(key, Value::Number((index as u64).into()));
+    index
+}
+
+fn next_response_content_index(state: &mut DecodeState) -> usize {
+    let key = "responses_next_content_index";
+    let index = state
+        .extensions
+        .get(key)
+        .and_then(Value::as_u64)
+        .unwrap_or(0) as usize;
+    state
+        .extensions
+        .insert(key.to_string(), Value::Number(((index + 1) as u64).into()));
+    index
 }
 
 fn mark_streamed_output(state: &mut DecodeState, output_index: usize) {
@@ -383,5 +419,54 @@ fn push_message_done_once(
             usage: None,
             extensions: common::empty_extensions(),
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use crate::{DecodeState, UniversalEvent};
+
+    use super::decode_chunk;
+
+    #[test]
+    fn scopes_content_indexes_by_output_item() {
+        let mut state = DecodeState::default();
+        let first = decode_chunk(
+            json!({
+                "type": "response.output_text.delta",
+                "output_index": 0,
+                "content_index": 0,
+                "delta": "First"
+            }),
+            &mut state,
+        )
+        .expect("first chunk decodes");
+        let second = decode_chunk(
+            json!({
+                "type": "response.output_text.delta",
+                "output_index": 1,
+                "content_index": 0,
+                "delta": "Second"
+            }),
+            &mut state,
+        )
+        .expect("second chunk decodes");
+
+        assert!(first
+            .iter()
+            .any(|event| matches!(event, UniversalEvent::ContentStart { index: 0, .. })));
+        assert!(first.iter().any(|event| matches!(
+            event,
+            UniversalEvent::TextDelta { index: 0, text } if text == "First"
+        )));
+        assert!(second
+            .iter()
+            .any(|event| matches!(event, UniversalEvent::ContentStart { index: 1, .. })));
+        assert!(second.iter().any(|event| matches!(
+            event,
+            UniversalEvent::TextDelta { index: 1, text } if text == "Second"
+        )));
     }
 }
