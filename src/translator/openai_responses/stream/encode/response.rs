@@ -1,131 +1,9 @@
 use serde_json::{json, Value};
 
 use crate::translator::common;
-use crate::{EncodeState, Result, UniversalEvent, WireEvent};
+use crate::{EncodeState, WireEvent};
 
-pub(super) fn encode(events: &[UniversalEvent], state: &mut EncodeState) -> Result<Vec<WireEvent>> {
-    let mut wire_events = Vec::new();
-    for event in events {
-        match event {
-            UniversalEvent::ResponseStart { id, model, .. } => {
-                if let Some(id) = id {
-                    state.extensions.insert("responseId".to_string(), json!(id));
-                }
-                if let Some(model) = model {
-                    state
-                        .extensions
-                        .insert("responseModel".to_string(), json!(model));
-                }
-                wire_events.push(common::wire_event(json!({
-                    "type": "response.created",
-                    "response": response_shell(state, "in_progress", None)
-                })));
-                wire_events.push(common::wire_event(json!({
-                    "type": "response.in_progress",
-                    "response": response_shell(state, "in_progress", None)
-                })));
-            }
-            UniversalEvent::TextDelta { index, text } => {
-                ensure_response_output_started(state, &mut wire_events, *index);
-                let output_index = response_message_output_index(state);
-                append_response_text(state, text);
-                wire_events.push(common::wire_event(json!({
-                    "type": "response.output_text.delta",
-                    "output_index": output_index,
-                    "content_index": index,
-                    "item_id": response_message_id(state),
-                    "delta": text
-                })));
-            }
-            UniversalEvent::ReasoningDelta { index, text } => {
-                if text.is_empty() {
-                    continue;
-                }
-                ensure_response_reasoning_started(state, &mut wire_events, *index);
-                let output_index = response_reasoning_output_index(state);
-                append_response_reasoning_text(state, text);
-                wire_events.push(common::wire_event(json!({
-                    "type": "response.reasoning_text.delta",
-                    "output_index": output_index,
-                    "content_index": index,
-                    "item_id": response_reasoning_id(state),
-                    "delta": text
-                })))
-            }
-            UniversalEvent::ToolCallDelta {
-                id,
-                name,
-                arguments_delta,
-            } => {
-                ensure_response_tool_started(state, &mut wire_events, id, name.as_deref(), None);
-                append_response_tool_arguments(state, id, arguments_delta);
-                if !arguments_delta.is_empty() {
-                    wire_events.push(common::wire_event(json!({
-                        "type": "response.function_call_arguments.delta",
-                        "output_index": response_tool_output_index(state, id),
-                        "item_id": response_tool_item_id(state, id),
-                        "delta": arguments_delta
-                    })));
-                }
-            }
-            UniversalEvent::ResponseDone { usage, .. } => {
-                if let Some(usage) = usage {
-                    state
-                        .extensions
-                        .insert("responseUsage".to_string(), json!(usage));
-                }
-                finish_response_reasoning(state, &mut wire_events);
-                finish_response_output(state, &mut wire_events);
-                finish_all_response_tools(state, &mut wire_events);
-                wire_events.push(common::wire_event(json!({
-                    "type": "response.completed",
-                    "response": response_shell(state, "completed", usage.as_ref())
-                })));
-            }
-            UniversalEvent::Error { message, raw } => wire_events.push(common::wire_event(json!({
-                "type": "response.failed",
-                "error": {
-                    "message": message,
-                    "raw": raw
-                }
-            }))),
-            UniversalEvent::Unknown { raw, .. } => {
-                wire_events.push(common::wire_event(raw.clone()));
-            }
-            UniversalEvent::ContentStart { index, block } => match block {
-                crate::ContentBlock::Reasoning { .. } => {
-                    ensure_response_reasoning_started(state, &mut wire_events, *index);
-                }
-                crate::ContentBlock::ToolCall { id, name, .. } => {
-                    ensure_response_tool_started(
-                        state,
-                        &mut wire_events,
-                        id,
-                        Some(name),
-                        Some(*index),
-                    );
-                }
-                _ => {}
-            },
-            UniversalEvent::ContentDone { index, final_block } => {
-                if let Some(crate::ContentBlock::ToolCall { id, .. }) = final_block {
-                    finish_response_tool(state, &mut wire_events, id);
-                } else if let Some(id) = response_tool_id_for_content_index(state, *index) {
-                    finish_response_tool(state, &mut wire_events, &id);
-                }
-            }
-            UniversalEvent::MessageDone { finish_reason, .. } => {
-                if matches!(finish_reason, Some(crate::FinishReason::ToolCall)) {
-                    finish_all_response_tools(state, &mut wire_events);
-                }
-            }
-            UniversalEvent::MessageStart { .. } => {}
-        }
-    }
-    Ok(wire_events)
-}
-
-fn append_response_text(state: &mut EncodeState, text: &str) {
+pub(super) fn append_response_text(state: &mut EncodeState, text: &str) {
     let mut current = state
         .extensions
         .get("responseText")
@@ -138,7 +16,7 @@ fn append_response_text(state: &mut EncodeState, text: &str) {
         .insert("responseText".to_string(), Value::String(current));
 }
 
-fn append_response_reasoning_text(state: &mut EncodeState, text: &str) {
+pub(super) fn append_response_reasoning_text(state: &mut EncodeState, text: &str) {
     let mut current = state
         .extensions
         .get("responseReasoningText")
@@ -151,7 +29,7 @@ fn append_response_reasoning_text(state: &mut EncodeState, text: &str) {
         .insert("responseReasoningText".to_string(), Value::String(current));
 }
 
-fn ensure_response_reasoning_started(
+pub(super) fn ensure_response_reasoning_started(
     state: &mut EncodeState,
     wire_events: &mut Vec<WireEvent>,
     content_index: usize,
@@ -179,7 +57,7 @@ fn ensure_response_reasoning_started(
     })));
 }
 
-fn finish_response_reasoning(state: &mut EncodeState, wire_events: &mut Vec<WireEvent>) {
+pub(super) fn finish_response_reasoning(state: &mut EncodeState, wire_events: &mut Vec<WireEvent>) {
     if !matches!(
         state.extensions.get("responseReasoningStarted"),
         Some(Value::Bool(true))
@@ -199,7 +77,7 @@ fn finish_response_reasoning(state: &mut EncodeState, wire_events: &mut Vec<Wire
     })));
 }
 
-fn ensure_response_output_started(
+pub(super) fn ensure_response_output_started(
     state: &mut EncodeState,
     wire_events: &mut Vec<WireEvent>,
     content_index: usize,
@@ -240,7 +118,7 @@ fn ensure_response_output_started(
     })));
 }
 
-fn finish_response_output(state: &mut EncodeState, wire_events: &mut Vec<WireEvent>) {
+pub(super) fn finish_response_output(state: &mut EncodeState, wire_events: &mut Vec<WireEvent>) {
     if !matches!(
         state.extensions.get("responseOutputStarted"),
         Some(Value::Bool(true))
@@ -287,7 +165,7 @@ fn finish_response_output(state: &mut EncodeState, wire_events: &mut Vec<WireEve
     })));
 }
 
-fn assign_response_message_output_index(state: &mut EncodeState) -> usize {
+pub(super) fn assign_response_message_output_index(state: &mut EncodeState) -> usize {
     if let Some(index) = state
         .extensions
         .get("responseOutputIndex")
@@ -303,7 +181,7 @@ fn assign_response_message_output_index(state: &mut EncodeState) -> usize {
     index
 }
 
-fn response_message_output_index(state: &EncodeState) -> usize {
+pub(super) fn response_message_output_index(state: &EncodeState) -> usize {
     state
         .extensions
         .get("responseOutputIndex")
@@ -311,7 +189,7 @@ fn response_message_output_index(state: &EncodeState) -> usize {
         .unwrap_or(0) as usize
 }
 
-fn assign_response_reasoning_output_index(state: &mut EncodeState) -> usize {
+pub(super) fn assign_response_reasoning_output_index(state: &mut EncodeState) -> usize {
     if let Some(index) = state
         .extensions
         .get("responseReasoningOutputIndex")
@@ -327,7 +205,7 @@ fn assign_response_reasoning_output_index(state: &mut EncodeState) -> usize {
     index
 }
 
-fn response_reasoning_output_index(state: &EncodeState) -> usize {
+pub(super) fn response_reasoning_output_index(state: &EncodeState) -> usize {
     state
         .extensions
         .get("responseReasoningOutputIndex")
@@ -335,7 +213,7 @@ fn response_reasoning_output_index(state: &EncodeState) -> usize {
         .unwrap_or(0) as usize
 }
 
-fn ensure_response_tool_started(
+pub(super) fn ensure_response_tool_started(
     state: &mut EncodeState,
     wire_events: &mut Vec<WireEvent>,
     id: &str,
@@ -375,7 +253,11 @@ fn ensure_response_tool_started(
     })));
 }
 
-fn append_response_tool_arguments(state: &mut EncodeState, id: &str, arguments_delta: &str) {
+pub(super) fn append_response_tool_arguments(
+    state: &mut EncodeState,
+    id: &str,
+    arguments_delta: &str,
+) {
     if arguments_delta.is_empty() {
         return;
     }
@@ -391,13 +273,17 @@ fn append_response_tool_arguments(state: &mut EncodeState, id: &str, arguments_d
         .insert(response_tool_arguments_key(id), Value::String(current));
 }
 
-fn finish_all_response_tools(state: &mut EncodeState, wire_events: &mut Vec<WireEvent>) {
+pub(super) fn finish_all_response_tools(state: &mut EncodeState, wire_events: &mut Vec<WireEvent>) {
     for id in response_tool_ids(state) {
         finish_response_tool(state, wire_events, &id);
     }
 }
 
-fn finish_response_tool(state: &mut EncodeState, wire_events: &mut Vec<WireEvent>, id: &str) {
+pub(super) fn finish_response_tool(
+    state: &mut EncodeState,
+    wire_events: &mut Vec<WireEvent>,
+    id: &str,
+) {
     if !matches!(
         state.extensions.get(&response_tool_started_key(id)),
         Some(Value::Bool(true))
@@ -426,7 +312,7 @@ fn finish_response_tool(state: &mut EncodeState, wire_events: &mut Vec<WireEvent
     })));
 }
 
-fn response_message_id(state: &EncodeState) -> String {
+pub(super) fn response_message_id(state: &EncodeState) -> String {
     let id = state
         .extensions
         .get("responseId")
@@ -439,7 +325,7 @@ fn response_message_id(state: &EncodeState) -> String {
     }
 }
 
-fn response_text(state: &EncodeState) -> String {
+pub(super) fn response_text(state: &EncodeState) -> String {
     state
         .extensions
         .get("responseText")
@@ -448,7 +334,7 @@ fn response_text(state: &EncodeState) -> String {
         .to_string()
 }
 
-fn response_reasoning_text(state: &EncodeState) -> String {
+pub(super) fn response_reasoning_text(state: &EncodeState) -> String {
     state
         .extensions
         .get("responseReasoningText")
@@ -457,7 +343,7 @@ fn response_reasoning_text(state: &EncodeState) -> String {
         .to_string()
 }
 
-fn response_reasoning_id(state: &EncodeState) -> String {
+pub(super) fn response_reasoning_id(state: &EncodeState) -> String {
     let id = state
         .extensions
         .get("responseId")
@@ -470,7 +356,7 @@ fn response_reasoning_id(state: &EncodeState) -> String {
     }
 }
 
-fn response_output_item(state: &EncodeState) -> Value {
+pub(super) fn response_output_item(state: &EncodeState) -> Value {
     json!({
         "id": response_message_id(state),
         "type": "message",
@@ -484,7 +370,7 @@ fn response_output_item(state: &EncodeState) -> Value {
     })
 }
 
-fn response_reasoning_output_item(state: &EncodeState) -> Value {
+pub(super) fn response_reasoning_output_item(state: &EncodeState) -> Value {
     json!({
         "id": response_reasoning_id(state),
         "type": "reasoning",
@@ -497,7 +383,7 @@ fn response_reasoning_output_item(state: &EncodeState) -> Value {
     })
 }
 
-fn response_tool_output_item(state: &EncodeState, id: &str) -> Value {
+pub(super) fn response_tool_output_item(state: &EncodeState, id: &str) -> Value {
     json!({
         "id": response_tool_item_id(state, id),
         "type": "function_call",
@@ -508,7 +394,11 @@ fn response_tool_output_item(state: &EncodeState, id: &str) -> Value {
     })
 }
 
-fn response_shell(state: &EncodeState, status: &str, usage: Option<&crate::Usage>) -> Value {
+pub(super) fn response_shell(
+    state: &EncodeState,
+    status: &str,
+    usage: Option<&crate::Usage>,
+) -> Value {
     let id = state
         .extensions
         .get("responseId")
@@ -551,7 +441,7 @@ fn response_shell(state: &EncodeState, status: &str, usage: Option<&crate::Usage
     })
 }
 
-fn response_output_items(state: &EncodeState) -> Vec<Value> {
+pub(super) fn response_output_items(state: &EncodeState) -> Vec<Value> {
     let mut output = Vec::new();
     if matches!(
         state.extensions.get("responseReasoningDone"),
@@ -586,7 +476,7 @@ fn response_output_items(state: &EncodeState) -> Vec<Value> {
     output.into_iter().map(|(_, item)| item).collect()
 }
 
-fn assign_response_tool_output_index(state: &mut EncodeState, id: &str) -> usize {
+pub(super) fn assign_response_tool_output_index(state: &mut EncodeState, id: &str) -> usize {
     let key = response_tool_output_index_key(id);
     if let Some(index) = state.extensions.get(&key).and_then(Value::as_u64) {
         return index as usize;
@@ -598,7 +488,7 @@ fn assign_response_tool_output_index(state: &mut EncodeState, id: &str) -> usize
     index
 }
 
-fn response_tool_output_index(state: &EncodeState, id: &str) -> usize {
+pub(super) fn response_tool_output_index(state: &EncodeState, id: &str) -> usize {
     state
         .extensions
         .get(&response_tool_output_index_key(id))
@@ -606,7 +496,7 @@ fn response_tool_output_index(state: &EncodeState, id: &str) -> usize {
         .unwrap_or(0) as usize
 }
 
-fn remember_response_tool_id(state: &mut EncodeState, id: &str) {
+pub(super) fn remember_response_tool_id(state: &mut EncodeState, id: &str) {
     let mut ids = response_tool_ids(state);
     if ids.iter().any(|existing| existing == id) {
         return;
@@ -618,7 +508,7 @@ fn remember_response_tool_id(state: &mut EncodeState, id: &str) {
     );
 }
 
-fn response_tool_ids(state: &EncodeState) -> Vec<String> {
+pub(super) fn response_tool_ids(state: &EncodeState) -> Vec<String> {
     state
         .extensions
         .get("responseToolIds")
@@ -632,7 +522,10 @@ fn response_tool_ids(state: &EncodeState) -> Vec<String> {
         .unwrap_or_default()
 }
 
-fn response_tool_id_for_content_index(state: &EncodeState, index: usize) -> Option<String> {
+pub(super) fn response_tool_id_for_content_index(
+    state: &EncodeState,
+    index: usize,
+) -> Option<String> {
     state
         .extensions
         .get(&format!("responseToolIdForContentIndex:{index}"))
@@ -640,7 +533,7 @@ fn response_tool_id_for_content_index(state: &EncodeState, index: usize) -> Opti
         .map(ToString::to_string)
 }
 
-fn response_tool_name(state: &EncodeState, id: &str) -> String {
+pub(super) fn response_tool_name(state: &EncodeState, id: &str) -> String {
     state
         .extensions
         .get(&response_tool_name_key(id))
@@ -650,7 +543,7 @@ fn response_tool_name(state: &EncodeState, id: &str) -> String {
         .to_string()
 }
 
-fn response_tool_arguments(state: &EncodeState, id: &str) -> String {
+pub(super) fn response_tool_arguments(state: &EncodeState, id: &str) -> String {
     state
         .extensions
         .get(&response_tool_arguments_key(id))
@@ -659,7 +552,7 @@ fn response_tool_arguments(state: &EncodeState, id: &str) -> String {
         .to_string()
 }
 
-fn response_tool_item_id(state: &EncodeState, id: &str) -> String {
+pub(super) fn response_tool_item_id(state: &EncodeState, id: &str) -> String {
     state
         .extensions
         .get(&response_tool_item_id_key(id))
@@ -674,31 +567,31 @@ fn response_tool_item_id(state: &EncodeState, id: &str) -> String {
         })
 }
 
-fn response_tool_output_index_key(id: &str) -> String {
+pub(super) fn response_tool_output_index_key(id: &str) -> String {
     format!("responseToolOutputIndex:{id}")
 }
 
-fn response_tool_started_key(id: &str) -> String {
+pub(super) fn response_tool_started_key(id: &str) -> String {
     format!("responseToolStarted:{id}")
 }
 
-fn response_tool_done_key(id: &str) -> String {
+pub(super) fn response_tool_done_key(id: &str) -> String {
     format!("responseToolDone:{id}")
 }
 
-fn response_tool_name_key(id: &str) -> String {
+pub(super) fn response_tool_name_key(id: &str) -> String {
     format!("responseToolName:{id}")
 }
 
-fn response_tool_arguments_key(id: &str) -> String {
+pub(super) fn response_tool_arguments_key(id: &str) -> String {
     format!("responseToolArguments:{id}")
 }
 
-fn response_tool_item_id_key(id: &str) -> String {
+pub(super) fn response_tool_item_id_key(id: &str) -> String {
     format!("responseToolItemId:{id}")
 }
 
-fn usage_to_openai_value(usage: Option<&crate::Usage>) -> Value {
+pub(super) fn usage_to_openai_value(usage: Option<&crate::Usage>) -> Value {
     match usage {
         Some(usage) => json!({
             "input_tokens": usage.input_tokens,
@@ -706,74 +599,5 @@ fn usage_to_openai_value(usage: Option<&crate::Usage>) -> Value {
             "total_tokens": usage.total_tokens
         }),
         None => Value::Null,
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use crate::translator::common;
-    use crate::{EncodeState, UniversalEvent};
-
-    use super::encode;
-
-    #[test]
-    fn opens_reasoning_item_before_reasoning_delta() {
-        let mut state = EncodeState::default();
-        let events = encode(
-            &[
-                UniversalEvent::ResponseStart {
-                    id: Some("resp_1".to_string()),
-                    model: Some("deepseek-v4-pro".to_string()),
-                    extensions: common::empty_extensions(),
-                },
-                UniversalEvent::ReasoningDelta {
-                    index: 0,
-                    text: "Need to think.".to_string(),
-                },
-                UniversalEvent::TextDelta {
-                    index: 0,
-                    text: "OK".to_string(),
-                },
-                UniversalEvent::ResponseDone {
-                    usage: None,
-                    extensions: common::empty_extensions(),
-                },
-            ],
-            &mut state,
-        )
-        .expect("events encode");
-
-        let reasoning_added_index = events
-            .iter()
-            .position(|event| {
-                event.data["type"] == "response.output_item.added"
-                    && event.data["item"]["type"] == "reasoning"
-            })
-            .expect("reasoning item added");
-        let reasoning_delta_index = events
-            .iter()
-            .position(|event| event.data["type"] == "response.reasoning_text.delta")
-            .expect("reasoning delta");
-
-        assert!(reasoning_added_index < reasoning_delta_index);
-        assert_eq!(
-            events[reasoning_delta_index].data["item_id"],
-            events[reasoning_added_index].data["item"]["id"]
-        );
-
-        let completed = events
-            .iter()
-            .find(|event| event.data["type"] == "response.completed")
-            .expect("response completed");
-        assert_eq!(completed.data["response"]["output"][0]["type"], "reasoning");
-        assert_eq!(
-            completed.data["response"]["output"][0]["content"][0]["text"],
-            "Need to think."
-        );
-        assert_eq!(completed.data["response"]["output"][1]["type"], "message");
-        assert_eq!(
-            completed.data["response"]["output"][1]["content"][0]["text"],
-            "OK"
-        );
     }
 }
