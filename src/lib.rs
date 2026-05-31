@@ -26,8 +26,8 @@ pub use schema::{
 };
 pub use stream::{DecodeState, EncodeState, UniversalEvent};
 pub use translator::{
-    AnthropicMessagesTranslator, GeminiGenerateContentTranslator, OpenAiChatTranslator,
-    OpenAiResponsesTranslator, WireEvent, WireTranslator,
+    translator_for_protocol, AnthropicMessagesTranslator, GeminiGenerateContentTranslator,
+    OpenAiChatTranslator, OpenAiResponsesTranslator, WireEvent, WireTranslator,
 };
 pub use universal::{
     ContentBlock, Extensions, FinishReason, GenerationConfig, ReasoningConfig, Role, SourcePayload,
