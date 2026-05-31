@@ -1,4 +1,3 @@
-
 use crate::translator::common;
 use crate::{EncodeState, UniversalEvent};
 
