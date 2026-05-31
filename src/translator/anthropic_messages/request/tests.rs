@@ -1,4 +1,3 @@
-
 use serde_json::json;
 
 use crate::{ContentBlock, Role, UniversalItem, UniversalRequest};
