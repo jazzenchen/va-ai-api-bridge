@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use serde_json::{json, Map, Value};
 
 use crate::translator::common;
@@ -170,6 +172,7 @@ fn push_message_if_any(
 
 fn items_to_contents(items: &[UniversalItem]) -> Vec<Value> {
     let mut contents = Vec::new();
+    let mut tool_names_by_id = BTreeMap::new();
     for item in items {
         match item {
             UniversalItem::Message { role, content, .. } => {
@@ -184,9 +187,10 @@ fn items_to_contents(items: &[UniversalItem]) -> Vec<Value> {
                 is_error,
                 ..
             } => {
+                let tool_name = tool_names_by_id.get(tool_call_id).map(String::as_str);
                 contents.push(json!({
-                    "role": "function",
-                    "parts": [function_response_part(Some(tool_call_id), None, content, *is_error)]
+                    "role": "user",
+                    "parts": [function_response_part(Some(tool_call_id), tool_name, content, *is_error)]
                 }));
             }
             UniversalItem::ToolCall {
@@ -195,6 +199,7 @@ fn items_to_contents(items: &[UniversalItem]) -> Vec<Value> {
                 arguments,
                 ..
             } => {
+                tool_names_by_id.insert(id.clone(), name.clone());
                 contents.push(json!({
                     "role": "model",
                     "parts": [function_call_part(Some(id), name, arguments.clone())]

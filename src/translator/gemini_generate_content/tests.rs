@@ -1,7 +1,8 @@
 use serde_json::json;
 
 use crate::{
-    ContentBlock, EncodeState, FinishReason, Role, UniversalEvent, UniversalItem, WireTranslator,
+    ContentBlock, EncodeState, FinishReason, Role, UniversalEvent, UniversalItem, UniversalRequest,
+    WireTranslator,
 };
 
 use super::{encode_response, GeminiGenerateContentTranslator};
@@ -119,6 +120,44 @@ fn decodes_snake_case_generate_content_request() {
     assert_eq!(request.generation.max_output_tokens, Some(32));
     assert_eq!(request.generation.top_p, Some(0.9));
     assert_eq!(request.tools[0].name, "lookup");
+}
+
+#[test]
+fn encodes_tool_results_as_user_function_responses_with_names() {
+    let request = UniversalRequest {
+        input: vec![
+            UniversalItem::ToolCall {
+                id: "call_pwd".to_string(),
+                name: "exec_command".to_string(),
+                arguments: json!({ "cmd": "pwd" }),
+                extensions: Default::default(),
+            },
+            UniversalItem::ToolResult {
+                tool_call_id: "call_pwd".to_string(),
+                content: vec![ContentBlock::Text {
+                    text: "/tmp/project".to_string(),
+                }],
+                is_error: false,
+                extensions: Default::default(),
+            },
+        ],
+        ..UniversalRequest::default()
+    };
+
+    let wire = GeminiGenerateContentTranslator
+        .encode_request(&request)
+        .unwrap();
+
+    assert_eq!(wire["contents"][0]["role"], "model");
+    assert_eq!(wire["contents"][1]["role"], "user");
+    assert_eq!(
+        wire["contents"][1]["parts"][0]["functionResponse"]["id"],
+        "call_pwd"
+    );
+    assert_eq!(
+        wire["contents"][1]["parts"][0]["functionResponse"]["name"],
+        "exec_command"
+    );
 }
 
 #[test]
