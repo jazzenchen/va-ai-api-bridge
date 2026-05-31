@@ -30,20 +30,25 @@ pub(super) fn decode_chunk(raw: Value, state: &mut DecodeState) -> Result<Vec<Un
             for block in openai::openai_content_to_blocks(delta.content.as_ref()) {
                 match block {
                     ContentBlock::Text { text } => {
-                        common::ensure_content_start(
+                        let content_index = chat_content_index(state, choice_index, "text");
+                        ensure_chat_content_start(
                             &mut events,
                             state,
                             choice_index,
+                            content_index,
                             ContentBlock::Text {
                                 text: String::new(),
                             },
                         );
                         events.push(UniversalEvent::TextDelta {
-                            index: choice_index,
+                            index: content_index,
                             text,
                         });
                     }
-                    block => common::push_block_events(&mut events, choice_index, block),
+                    block => {
+                        let content_index = next_chat_content_index(state, choice_index);
+                        common::push_block_events(&mut events, content_index, block);
+                    }
                 }
             }
 
@@ -54,10 +59,12 @@ pub(super) fn decode_chunk(raw: Value, state: &mut DecodeState) -> Result<Vec<Un
                 .filter(|content| !content.is_empty())
             {
                 common::ensure_message_start(&mut events, state, message_id.clone(), role);
-                common::ensure_content_start(
+                let content_index = chat_content_index(state, choice_index, "reasoning");
+                ensure_chat_content_start(
                     &mut events,
                     state,
                     choice_index,
+                    content_index,
                     ContentBlock::Reasoning {
                         text: None,
                         encrypted: None,
@@ -65,7 +72,7 @@ pub(super) fn decode_chunk(raw: Value, state: &mut DecodeState) -> Result<Vec<Un
                     },
                 );
                 events.push(UniversalEvent::ReasoningDelta {
-                    index: choice_index,
+                    index: content_index,
                     text: reasoning_delta.to_string(),
                 });
             }
@@ -106,6 +113,46 @@ pub(super) fn decode_chunk(raw: Value, state: &mut DecodeState) -> Result<Vec<Un
     }
 
     Ok(events)
+}
+
+fn chat_content_index(state: &mut DecodeState, choice_index: usize, kind: &str) -> usize {
+    let key = format!("openaiChatContentIndex:{choice_index}:{kind}");
+    if let Some(index) = state.extensions.get(&key).and_then(Value::as_u64) {
+        return index as usize;
+    }
+    let index = next_chat_content_index(state, choice_index);
+    state
+        .extensions
+        .insert(key, Value::Number((index as u64).into()));
+    index
+}
+
+fn next_chat_content_index(state: &mut DecodeState, choice_index: usize) -> usize {
+    let key = format!("openaiChatNextContentIndex:{choice_index}");
+    let index = state
+        .extensions
+        .get(&key)
+        .and_then(Value::as_u64)
+        .unwrap_or(0) as usize;
+    state
+        .extensions
+        .insert(key, Value::Number(((index + 1) as u64).into()));
+    index
+}
+
+fn ensure_chat_content_start(
+    events: &mut Vec<UniversalEvent>,
+    state: &mut DecodeState,
+    choice_index: usize,
+    index: usize,
+    block: ContentBlock,
+) {
+    if common::mark_once(
+        state,
+        &format!("openaiChatContentStart:{choice_index}:{index}"),
+    ) {
+        events.push(UniversalEvent::ContentStart { index, block });
+    }
 }
 
 fn stream_tool_call_id(
@@ -233,6 +280,49 @@ mod tests {
         assert!(events.iter().any(|event| matches!(
             event,
             UniversalEvent::ReasoningDelta { text, .. } if text == "Need to inspect files."
+        )));
+    }
+
+    #[test]
+    fn keeps_reasoning_and_text_on_distinct_content_indexes() {
+        let mut state = DecodeState::default();
+        let reasoning = decode_chunk(
+            json!({
+                "id": "chatcmpl_1",
+                "model": "deepseek-v4-pro",
+                "choices": [{
+                    "index": 0,
+                    "delta": {
+                        "role": "assistant",
+                        "reasoning_content": "Think first."
+                    }
+                }]
+            }),
+            &mut state,
+        )
+        .expect("reasoning chunk decodes");
+        let text = decode_chunk(
+            json!({
+                "id": "chatcmpl_1",
+                "model": "deepseek-v4-pro",
+                "choices": [{
+                    "index": 0,
+                    "delta": {
+                        "content": "Then answer."
+                    }
+                }]
+            }),
+            &mut state,
+        )
+        .expect("text chunk decodes");
+
+        assert!(reasoning.iter().any(|event| matches!(
+            event,
+            UniversalEvent::ReasoningDelta { index: 0, text } if text == "Think first."
+        )));
+        assert!(text.iter().any(|event| matches!(
+            event,
+            UniversalEvent::TextDelta { index: 1, text } if text == "Then answer."
         )));
     }
 }

@@ -1,8 +1,14 @@
 # va-ai-api-bridge (va-aab)
 
-Protocol translation primitives for AI API request and response shapes.
+Protocol translation primitives and SDK types for AI API request, response, and stream shapes.
 
-`va-ai-api-bridge` (nickname: `va-aab`) is intentionally not an HTTP gateway. It does not perform networking, store credentials, manage accounts, retry upstreams, or own chat history. It provides the shared Rust types and traits VibeAround can use to translate between API package shapes such as OpenAI Responses, OpenAI Chat Completions, Anthropic Messages, and Gemini Generate Content.
+`va-ai-api-bridge` (nickname: `va-aab`) is intentionally not an HTTP gateway. It does not perform networking, store credentials, manage accounts, retry upstreams, or own chat history. It provides the shared Rust types and traits hosts such as VibeAround can use to translate between API package shapes such as OpenAI Responses, OpenAI Chat Completions, Anthropic Messages, and Gemini Generate Content.
+
+## Documentation
+
+- [SDK guide](docs/sdk-guide.md): public API surface, host boundary, examples, and SDK maturity.
+- [Architecture and IR](docs/architecture-and-ir.md): module layering, Universal IR structure, protocol mapping, and contribution workflow.
+- [Provider integration guide](docs/provider-integration-guide.md): official provider references, protocol matrix, adapter notes, and VibeAround test coverage.
 
 ## Boundary
 
@@ -56,3 +62,5 @@ Provider adapters only transform package shapes:
 ## Status
 
 This crate is an early API skeleton. The schema layer is deliberately permissive and keeps unknown fields so providers can evolve without breaking the bridge. Built-in translators cover the common request, response, and stream packet shapes; built-in provider adapters cover the provider-specific package transforms that can stay independent of host networking, credentials, and profile storage.
+
+As of the current `0.x` line, the crate is suitable as an internal SDK boundary but should still add runnable examples, generated API docs, and env-gated live integration tests before being treated as a polished external SDK.

@@ -60,6 +60,12 @@ pub(super) fn anthropic_image_source(
     extensions: &Extensions,
 ) -> Value {
     let mut source = Map::new();
+    if let Some(url) = url {
+        source.insert("type".to_string(), Value::String("url".to_string()));
+        source.insert("url".to_string(), Value::String(url.to_string()));
+        return Value::Object(source);
+    }
+
     source.insert("type".to_string(), Value::String("base64".to_string()));
     if let Some(media_type) = media_type {
         source.insert(
@@ -69,9 +75,6 @@ pub(super) fn anthropic_image_source(
     }
     if let Some(data) = data {
         source.insert("data".to_string(), Value::String(data.to_string()));
-    }
-    if let Some(url) = url {
-        source.insert("url".to_string(), Value::String(url.to_string()));
     }
     for (key, value) in extensions {
         source.insert(key.clone(), value.clone());

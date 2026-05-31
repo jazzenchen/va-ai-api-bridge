@@ -8,11 +8,13 @@ use crate::{
 };
 
 use super::shared::{
-    blocks_to_gemini_parts, decode_tool_choice, decode_tools, field, function_call_part,
-    function_response_part, gemini_function_call_id, gemini_function_response_id,
-    gemini_part_to_blocks, gemini_parts_to_blocks, gemini_role_to_universal,
-    generation_from_gemini, generation_to_gemini, model_from_route_segment, stringify_json,
-    tool_choice_to_gemini, tools_to_gemini, universal_role_to_gemini, VA_MODEL_KEY, VA_STREAM_KEY,
+    blocks_to_gemini_parts, decode_tool_choice, decode_tools, field,
+    function_call_part_with_signature, function_response_part, gemini_function_call_id,
+    gemini_function_response_id, gemini_part_to_blocks, gemini_parts_to_blocks,
+    gemini_role_to_universal, generation_from_gemini, generation_to_gemini,
+    model_from_route_segment, stringify_json, thought_signature_from_extensions,
+    tool_choice_to_gemini, tools_to_gemini, universal_role_to_gemini, GEMINI_THOUGHT_SIGNATURE_KEY,
+    VA_MODEL_KEY, VA_STREAM_KEY,
 };
 
 pub(super) fn decode_request(raw: Value) -> Result<UniversalRequest> {
@@ -111,7 +113,7 @@ fn decode_contents(value: Option<&Value>) -> Result<Vec<UniversalItem>> {
                     .or_else(|| part.get("function_call"))
                 {
                     push_message_if_any(&mut out, role, &mut message_blocks);
-                    out.push(function_call_to_tool_call(function_call));
+                    out.push(function_call_to_tool_call(function_call, part));
                     continue;
                 }
                 message_blocks.extend(gemini_part_to_blocks(part));
@@ -137,7 +139,16 @@ fn function_response_to_tool_result(function_response: &Value) -> UniversalItem 
     }
 }
 
-fn function_call_to_tool_call(function_call: &Value) -> UniversalItem {
+fn function_call_to_tool_call(function_call: &Value, part: &Value) -> UniversalItem {
+    let mut extensions = common::empty_extensions();
+    if let Some(signature) = part
+        .get(GEMINI_THOUGHT_SIGNATURE_KEY)
+        .or_else(|| part.get("thought_signature"))
+        .and_then(Value::as_str)
+        .filter(|signature| !signature.is_empty())
+    {
+        extensions.insert(GEMINI_THOUGHT_SIGNATURE_KEY.to_string(), json!(signature));
+    }
     let name = function_call
         .get("name")
         .and_then(Value::as_str)
@@ -150,7 +161,7 @@ fn function_call_to_tool_call(function_call: &Value) -> UniversalItem {
             .get("args")
             .cloned()
             .unwrap_or_else(|| Value::Object(Map::new())),
-        extensions: common::empty_extensions(),
+        extensions,
     }
 }
 
@@ -197,12 +208,18 @@ fn items_to_contents(items: &[UniversalItem]) -> Vec<Value> {
                 id,
                 name,
                 arguments,
+                extensions,
                 ..
             } => {
                 tool_names_by_id.insert(id.clone(), name.clone());
                 contents.push(json!({
                     "role": "model",
-                    "parts": [function_call_part(Some(id), name, arguments.clone())]
+                    "parts": [function_call_part_with_signature(
+                        Some(id),
+                        name,
+                        arguments.clone(),
+                        thought_signature_from_extensions(extensions)
+                    )]
                 }));
             }
             UniversalItem::Reasoning { .. } => {}
