@@ -60,6 +60,7 @@ impl UniversalResponse {
     pub fn from_events(events: &[UniversalEvent]) -> Self {
         let mut response = UniversalResponse::default();
         let mut current_message: Option<PartialMessage> = None;
+        let mut pending_tool_calls: Vec<PartialToolCall> = Vec::new();
         let mut pending_reasoning: BTreeMap<usize, String> = BTreeMap::new();
 
         for event in events {
@@ -82,6 +83,7 @@ impl UniversalResponse {
                     extensions,
                 } => {
                     flush_partial_message(&mut response.output, &mut current_message);
+                    flush_pending_tool_calls(&mut response.output, &mut pending_tool_calls);
                     current_message = Some(PartialMessage {
                         id: Some(id.clone()),
                         role: *role,
@@ -115,14 +117,12 @@ impl UniversalResponse {
                     arguments_delta,
                 } => {
                     flush_partial_message(&mut response.output, &mut current_message);
-                    response.output.push(UniversalItem::ToolCall {
-                        id: id.clone(),
-                        name: name.clone().unwrap_or_default(),
-                        arguments: arguments_delta
-                            .parse::<Value>()
-                            .unwrap_or_else(|_| Value::String(arguments_delta.clone())),
-                        extensions: Extensions::new(),
-                    });
+                    append_tool_call_delta(
+                        &mut pending_tool_calls,
+                        id,
+                        name.as_deref(),
+                        arguments_delta,
+                    );
                 }
                 UniversalEvent::MessageDone {
                     finish_reason,
@@ -134,11 +134,13 @@ impl UniversalResponse {
                         response.usage = usage.clone();
                     }
                     flush_partial_message(&mut response.output, &mut current_message);
+                    flush_pending_tool_calls(&mut response.output, &mut pending_tool_calls);
                 }
                 UniversalEvent::ResponseDone { usage, extensions } => {
                     if usage.is_some() {
                         response.usage = usage.clone();
                     }
+                    flush_pending_tool_calls(&mut response.output, &mut pending_tool_calls);
                     response.status = Some("completed".to_string());
                     response.extensions.extend(extensions.clone());
                 }
@@ -152,6 +154,7 @@ impl UniversalResponse {
                 }
                 UniversalEvent::Unknown { raw, .. } => {
                     flush_partial_message(&mut response.output, &mut current_message);
+                    flush_pending_tool_calls(&mut response.output, &mut pending_tool_calls);
                     response
                         .output
                         .push(UniversalItem::Unknown { raw: raw.clone() });
@@ -161,6 +164,7 @@ impl UniversalResponse {
         }
 
         flush_partial_message(&mut response.output, &mut current_message);
+        flush_pending_tool_calls(&mut response.output, &mut pending_tool_calls);
         for (index, text) in pending_reasoning {
             response.output.insert(
                 index.min(response.output.len()),
@@ -267,6 +271,12 @@ struct PartialMessage {
     extensions: Extensions,
 }
 
+struct PartialToolCall {
+    id: String,
+    name: Option<String>,
+    arguments: String,
+}
+
 fn flush_partial_message(output: &mut Vec<UniversalItem>, message: &mut Option<PartialMessage>) {
     let Some(message) = message.take() else {
         return;
@@ -277,6 +287,49 @@ fn flush_partial_message(output: &mut Vec<UniversalItem>, message: &mut Option<P
         content: message.content.into_values().collect(),
         extensions: message.extensions,
     });
+}
+
+fn append_tool_call_delta(
+    pending_tool_calls: &mut Vec<PartialToolCall>,
+    id: &str,
+    name: Option<&str>,
+    arguments_delta: &str,
+) {
+    let Some(tool_call) = pending_tool_calls
+        .iter_mut()
+        .find(|tool_call| tool_call.id == id)
+    else {
+        pending_tool_calls.push(PartialToolCall {
+            id: id.to_string(),
+            name: name
+                .filter(|name| !name.is_empty())
+                .map(ToString::to_string),
+            arguments: arguments_delta.to_string(),
+        });
+        return;
+    };
+
+    if let Some(name) = name.filter(|name| !name.is_empty()) {
+        tool_call.name = Some(name.to_string());
+    }
+    tool_call.arguments.push_str(arguments_delta);
+}
+
+fn flush_pending_tool_calls(
+    output: &mut Vec<UniversalItem>,
+    pending_tool_calls: &mut Vec<PartialToolCall>,
+) {
+    for tool_call in std::mem::take(pending_tool_calls) {
+        output.push(UniversalItem::ToolCall {
+            id: tool_call.id,
+            name: tool_call.name.unwrap_or_default(),
+            arguments: tool_call
+                .arguments
+                .parse::<Value>()
+                .unwrap_or_else(|_| Value::String(tool_call.arguments)),
+            extensions: Extensions::new(),
+        });
+    }
 }
 
 fn append_text_block(content: &mut BTreeMap<usize, ContentBlock>, index: usize, text: &str) {
@@ -524,4 +577,38 @@ pub struct SourcePayload {
 
 fn is_false(value: &bool) -> bool {
     !*value
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use crate::{UniversalEvent, UniversalItem, UniversalResponse};
+
+    #[test]
+    fn aggregates_split_tool_call_deltas_by_id() {
+        let response = UniversalResponse::from_events(&[
+            UniversalEvent::ToolCallDelta {
+                id: "call_pwd".to_string(),
+                name: Some("exec_command".to_string()),
+                arguments_delta: "{\"cmd\"".to_string(),
+            },
+            UniversalEvent::ToolCallDelta {
+                id: "call_pwd".to_string(),
+                name: None,
+                arguments_delta: ":\"pwd\"}".to_string(),
+            },
+        ]);
+
+        assert_eq!(response.output.len(), 1);
+        assert!(matches!(
+            &response.output[0],
+            UniversalItem::ToolCall {
+                id,
+                name,
+                arguments,
+                ..
+            } if id == "call_pwd" && name == "exec_command" && arguments == &json!({ "cmd": "pwd" })
+        ));
+    }
 }
