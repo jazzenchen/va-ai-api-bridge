@@ -236,4 +236,25 @@ mod tests {
             }))
         );
     }
+
+    #[test]
+    fn encodes_image_url_as_url_source() {
+        let block = ContentBlock::Image {
+            media_type: Some("image/png".to_string()),
+            url: Some("https://example.test/image.png".to_string()),
+            data: None,
+            extensions: crate::translator::common::empty_extensions(),
+        };
+
+        let encoded = block_to_anthropic_block(&block);
+
+        assert_eq!(encoded.kind, "image");
+        assert_eq!(
+            encoded.source,
+            Some(json!({
+                "type": "url",
+                "url": "https://example.test/image.png"
+            }))
+        );
+    }
 }
