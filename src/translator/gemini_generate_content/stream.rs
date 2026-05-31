@@ -19,7 +19,10 @@ pub(super) fn decode_stream_chunk(
     let mut events = Vec::new();
     if mark_once(state, "gemini.response_start") {
         events.push(UniversalEvent::ResponseStart {
-            id: None,
+            id: raw
+                .get("responseId")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned),
             model: raw
                 .get("modelVersion")
                 .and_then(Value::as_str)

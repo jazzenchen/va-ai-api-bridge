@@ -1,7 +1,8 @@
 use serde_json::json;
 
 use crate::{
-    ContentBlock, EncodeState, FinishReason, Role, UniversalEvent, UniversalItem, WireTranslator,
+    ContentBlock, DecodeState, EncodeState, FinishReason, Role, UniversalEvent, UniversalItem,
+    UniversalRequest, WireTranslator,
 };
 
 use super::{encode_response, GeminiGenerateContentTranslator};
@@ -86,9 +87,84 @@ fn decodes_generate_content_request() {
 }
 
 #[test]
+fn decodes_snake_case_generate_content_request() {
+    let mut body = json!({
+        "system_instruction": { "parts": { "text": "Be concise." } },
+        "contents": {
+            "role": "user",
+            "parts": { "text": "hello" }
+        },
+        "generation_config": { "max_output_tokens": 32, "top_p": 0.9 },
+        "tools": [{
+            "function_declarations": [{
+                "name": "lookup",
+                "parameters": { "type": "object" }
+            }]
+        }],
+        "tool_config": {
+            "function_calling_config": {
+                "mode": "ANY",
+                "allowed_function_names": ["lookup"]
+            }
+        }
+    });
+    super::attach_route_metadata(&mut body, "models/gemini-2.5-flash", true);
+
+    let request = GeminiGenerateContentTranslator
+        .decode_request(body)
+        .unwrap();
+
+    assert_eq!(request.model.as_deref(), Some("gemini-2.5-flash"));
+    assert!(request.stream);
+    assert_eq!(request.instructions.len(), 1);
+    assert_eq!(request.generation.max_output_tokens, Some(32));
+    assert_eq!(request.generation.top_p, Some(0.9));
+    assert_eq!(request.tools[0].name, "lookup");
+}
+
+#[test]
+fn encodes_tool_results_as_user_function_responses_with_names() {
+    let request = UniversalRequest {
+        input: vec![
+            UniversalItem::ToolCall {
+                id: "call_pwd".to_string(),
+                name: "exec_command".to_string(),
+                arguments: json!({ "cmd": "pwd" }),
+                extensions: Default::default(),
+            },
+            UniversalItem::ToolResult {
+                tool_call_id: "call_pwd".to_string(),
+                content: vec![ContentBlock::Text {
+                    text: "/tmp/project".to_string(),
+                }],
+                is_error: false,
+                extensions: Default::default(),
+            },
+        ],
+        ..UniversalRequest::default()
+    };
+
+    let wire = GeminiGenerateContentTranslator
+        .encode_request(&request)
+        .unwrap();
+
+    assert_eq!(wire["contents"][0]["role"], "model");
+    assert_eq!(wire["contents"][1]["role"], "user");
+    assert_eq!(
+        wire["contents"][1]["parts"][0]["functionResponse"]["id"],
+        "call_pwd"
+    );
+    assert_eq!(
+        wire["contents"][1]["parts"][0]["functionResponse"]["name"],
+        "exec_command"
+    );
+}
+
+#[test]
 fn encodes_gemini_completion_response() {
     let events = GeminiGenerateContentTranslator
         .decode_response(json!({
+            "responseId": "resp_gemini",
             "candidates": [{
                 "content": { "role": "model", "parts": [{ "text": "pong" }] },
                 "finishReason": "STOP"
@@ -108,7 +184,29 @@ fn encodes_gemini_completion_response() {
         "pong"
     );
     assert_eq!(response["candidates"][0]["finishReason"], "STOP");
+    assert_eq!(response["responseId"], "resp_gemini");
     assert_eq!(response["usageMetadata"]["totalTokenCount"], 2);
+}
+
+#[test]
+fn decodes_gemini_stream_response_id() {
+    let mut state = DecodeState::default();
+    let events = GeminiGenerateContentTranslator
+        .decode_stream_chunk(
+            json!({
+                "responseId": "resp_stream",
+                "candidates": [{
+                    "content": { "role": "model", "parts": [{ "text": "pong" }] }
+                }]
+            }),
+            &mut state,
+        )
+        .unwrap();
+
+    assert!(matches!(
+        events.first(),
+        Some(UniversalEvent::ResponseStart { id: Some(id), .. }) if id == "resp_stream"
+    ));
 }
 
 #[test]
