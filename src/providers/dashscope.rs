@@ -1,4 +1,4 @@
-use serde_json::Value;
+use serde_json::{json, Map, Value};
 
 mod content;
 
@@ -23,6 +23,7 @@ impl DashScopeBridgeAdapter {
         object.remove("reasoning");
         object.remove("reasoning_effort");
         object.remove("reasoningEffort");
+        let forced_tool_choice = normalize_tool_choice_for_dashscope(object);
 
         let Some(model) = object.get("model").and_then(Value::as_str) else {
             return;
@@ -31,10 +32,77 @@ impl DashScopeBridgeAdapter {
             return;
         }
 
-        let enabled =
-            thinking_from_original_request(original_request).unwrap_or(self.thinking_enabled);
+        let enabled = if forced_tool_choice {
+            false
+        } else {
+            thinking_from_original_request(original_request).unwrap_or(self.thinking_enabled)
+        };
         object.insert("enable_thinking".to_string(), Value::Bool(enabled));
     }
+}
+
+fn normalize_tool_choice_for_dashscope(object: &mut Map<String, Value>) -> bool {
+    let Some(tool_choice) = object.get("tool_choice") else {
+        return false;
+    };
+
+    if is_specific_function_tool_choice(tool_choice) {
+        return true;
+    }
+
+    if tool_choice.as_str() != Some("required") {
+        return false;
+    }
+
+    if let Some(name) = single_function_tool_name(object.get("tools")) {
+        object.insert(
+            "tool_choice".to_string(),
+            json!({
+                "type": "function",
+                "function": { "name": name }
+            }),
+        );
+        return true;
+    }
+
+    object.insert("tool_choice".to_string(), Value::String("auto".to_string()));
+    false
+}
+
+fn is_specific_function_tool_choice(value: &Value) -> bool {
+    let Some(object) = value.as_object() else {
+        return false;
+    };
+    object.get("type").and_then(Value::as_str) == Some("function")
+        && object
+            .get("function")
+            .and_then(Value::as_object)
+            .and_then(|function| function.get("name"))
+            .or_else(|| object.get("name"))
+            .and_then(Value::as_str)
+            .is_some_and(|name| !name.trim().is_empty())
+}
+
+fn single_function_tool_name(tools: Option<&Value>) -> Option<String> {
+    let tools = tools?.as_array()?;
+    let mut names = tools.iter().filter_map(function_tool_name);
+    let name = names.next()?;
+    names.next().is_none().then_some(name)
+}
+
+fn function_tool_name(tool: &Value) -> Option<String> {
+    let object = tool.as_object()?;
+    if object.get("type").and_then(Value::as_str) != Some("function") {
+        return None;
+    }
+    object
+        .get("function")
+        .and_then(Value::as_object)
+        .and_then(|function| function.get("name"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(ToOwned::to_owned)
 }
 
 fn model_uses_dashscope_enable_thinking(model: &str) -> bool {
@@ -120,5 +188,71 @@ mod tests {
         );
 
         assert_eq!(chat_request["enable_thinking"], true);
+    }
+
+    #[test]
+    fn disables_thinking_for_specific_tool_choice() {
+        let mut adapter = DashScopeBridgeAdapter::new(None);
+        let mut chat_request = json!({
+            "model": "qwen3.6-plus",
+            "messages": [],
+            "tools": [{
+                "type": "function",
+                "function": { "name": "lookup" }
+            }],
+            "tool_choice": {
+                "type": "function",
+                "function": { "name": "lookup" }
+            }
+        });
+
+        adapter.prepare_chat_request(&json!({}), &mut chat_request);
+
+        assert_eq!(chat_request["enable_thinking"], false);
+        assert_eq!(chat_request["tool_choice"]["function"]["name"], "lookup");
+    }
+
+    #[test]
+    fn rewrites_required_tool_choice_to_single_function() {
+        let mut adapter = DashScopeBridgeAdapter::new(None);
+        let mut chat_request = json!({
+            "model": "qwen3.6-plus",
+            "messages": [],
+            "tools": [{
+                "type": "function",
+                "function": { "name": "lookup" }
+            }],
+            "tool_choice": "required"
+        });
+
+        adapter.prepare_chat_request(&json!({}), &mut chat_request);
+
+        assert_eq!(chat_request["enable_thinking"], false);
+        assert_eq!(
+            chat_request["tool_choice"],
+            json!({
+                "type": "function",
+                "function": { "name": "lookup" }
+            })
+        );
+    }
+
+    #[test]
+    fn rewrites_ambiguous_required_tool_choice_to_auto() {
+        let mut adapter = DashScopeBridgeAdapter::new(None);
+        let mut chat_request = json!({
+            "model": "qwen3.6-plus",
+            "messages": [],
+            "tools": [
+                { "type": "function", "function": { "name": "lookup" } },
+                { "type": "function", "function": { "name": "search" } }
+            ],
+            "tool_choice": "required"
+        });
+
+        adapter.prepare_chat_request(&json!({}), &mut chat_request);
+
+        assert_eq!(chat_request["enable_thinking"], true);
+        assert_eq!(chat_request["tool_choice"], "auto");
     }
 }
