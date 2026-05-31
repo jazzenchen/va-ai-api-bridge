@@ -1,7 +1,7 @@
-
 use serde_json::json;
 
-use super::*;
+use super::MiniMaxBridgeAdapter;
+use crate::{ContentBlock, UniversalEvent};
 
 #[test]
 fn clamps_minimax_chat_settings_to_supported_ranges() {
