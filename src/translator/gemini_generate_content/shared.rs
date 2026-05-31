@@ -72,14 +72,6 @@ pub(super) fn has_finish_reason(raw: &Value) -> bool {
         .any(|candidate| candidate.get("finishReason").is_some())
 }
 
-pub(super) fn mark_once(state: &mut crate::DecodeState, key: &str) -> bool {
-    if state.extensions.contains_key(key) {
-        return false;
-    }
-    state.extensions.insert(key.to_string(), Value::Bool(true));
-    true
-}
-
 pub(super) fn usage_from_gemini(value: Option<&Value>) -> Option<Usage> {
     let value = value?;
     Some(Usage {
