@@ -92,7 +92,22 @@ impl UniversalResponse {
                     });
                 }
                 UniversalEvent::ContentDone { index, final_block } => {
-                    if let (Some(message), Some(block)) = (&mut current_message, final_block) {
+                    if let Some(ContentBlock::ToolCall {
+                        id,
+                        name,
+                        arguments,
+                        extensions,
+                    }) = final_block
+                    {
+                        remember_tool_call_metadata(
+                            &mut pending_tool_calls,
+                            id,
+                            Some(name),
+                            extensions,
+                        );
+                        fill_tool_call_arguments_if_empty(&mut pending_tool_calls, id, arguments);
+                    } else if let (Some(message), Some(block)) = (&mut current_message, final_block)
+                    {
                         message.content.insert(*index, block.clone());
                     }
                 }
@@ -159,7 +174,22 @@ impl UniversalResponse {
                         .output
                         .push(UniversalItem::Unknown { raw: raw.clone() });
                 }
-                UniversalEvent::ContentStart { .. } => {}
+                UniversalEvent::ContentStart { block, .. } => {
+                    if let ContentBlock::ToolCall {
+                        id,
+                        name,
+                        extensions,
+                        ..
+                    } = block
+                    {
+                        remember_tool_call_metadata(
+                            &mut pending_tool_calls,
+                            id,
+                            Some(name),
+                            extensions,
+                        );
+                    }
+                }
             }
         }
 
@@ -275,6 +305,8 @@ struct PartialToolCall {
     id: String,
     name: Option<String>,
     arguments: String,
+    saw_delta: bool,
+    extensions: Extensions,
 }
 
 fn flush_partial_message(output: &mut Vec<UniversalItem>, message: &mut Option<PartialMessage>) {
@@ -295,6 +327,24 @@ fn append_tool_call_delta(
     name: Option<&str>,
     arguments_delta: &str,
 ) {
+    remember_tool_call_metadata(pending_tool_calls, id, name, &Extensions::new());
+    let Some(tool_call) = pending_tool_calls
+        .iter_mut()
+        .find(|tool_call| tool_call.id == id)
+    else {
+        return;
+    };
+
+    tool_call.arguments.push_str(arguments_delta);
+    tool_call.saw_delta = true;
+}
+
+fn remember_tool_call_metadata(
+    pending_tool_calls: &mut Vec<PartialToolCall>,
+    id: &str,
+    name: Option<&str>,
+    extensions: &Extensions,
+) {
     let Some(tool_call) = pending_tool_calls
         .iter_mut()
         .find(|tool_call| tool_call.id == id)
@@ -304,7 +354,9 @@ fn append_tool_call_delta(
             name: name
                 .filter(|name| !name.is_empty())
                 .map(ToString::to_string),
-            arguments: arguments_delta.to_string(),
+            arguments: String::new(),
+            saw_delta: false,
+            extensions: extensions.clone(),
         });
         return;
     };
@@ -312,7 +364,24 @@ fn append_tool_call_delta(
     if let Some(name) = name.filter(|name| !name.is_empty()) {
         tool_call.name = Some(name.to_string());
     }
-    tool_call.arguments.push_str(arguments_delta);
+    tool_call.extensions.extend(extensions.clone());
+}
+
+fn fill_tool_call_arguments_if_empty(
+    pending_tool_calls: &mut Vec<PartialToolCall>,
+    id: &str,
+    arguments: &Value,
+) {
+    let Some(tool_call) = pending_tool_calls
+        .iter_mut()
+        .find(|tool_call| tool_call.id == id)
+    else {
+        return;
+    };
+    if tool_call.saw_delta || !tool_call.arguments.is_empty() {
+        return;
+    }
+    tool_call.arguments = stringify_tool_arguments(arguments);
 }
 
 fn flush_pending_tool_calls(
@@ -327,8 +396,16 @@ fn flush_pending_tool_calls(
                 .arguments
                 .parse::<Value>()
                 .unwrap_or_else(|_| Value::String(tool_call.arguments)),
-            extensions: Extensions::new(),
+            extensions: tool_call.extensions,
         });
+    }
+}
+
+fn stringify_tool_arguments(arguments: &Value) -> String {
+    match arguments {
+        Value::String(value) => value.clone(),
+        Value::Null => String::new(),
+        value => serde_json::to_string(value).unwrap_or_default(),
     }
 }
 

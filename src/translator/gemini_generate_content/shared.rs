@@ -1,10 +1,14 @@
 use serde_json::{json, Map, Value};
 
 use crate::translator::common;
-use crate::{ContentBlock, FinishReason, GenerationConfig, Role, ToolChoice, UniversalTool, Usage};
+use crate::{
+    ContentBlock, Extensions, FinishReason, GenerationConfig, Role, ToolChoice, UniversalTool,
+    Usage,
+};
 
 pub(super) const VA_MODEL_KEY: &str = "__va_model";
 pub(super) const VA_STREAM_KEY: &str = "__va_stream";
+pub(super) const GEMINI_THOUGHT_SIGNATURE_KEY: &str = "thoughtSignature";
 
 pub fn attach_route_metadata(body: &mut Value, model: &str, stream: bool) {
     let Some(object) = body.as_object_mut() else {
@@ -256,6 +260,10 @@ pub(super) fn gemini_part_to_blocks(part: &Value) -> Vec<ContentBlock> {
         .get("functionCall")
         .or_else(|| part.get("function_call"))
     {
+        let mut extensions = common::empty_extensions();
+        if let Some(signature) = gemini_thought_signature(part) {
+            extensions.insert(GEMINI_THOUGHT_SIGNATURE_KEY.to_string(), json!(signature));
+        }
         let name = function_call
             .get("name")
             .and_then(Value::as_str)
@@ -268,7 +276,7 @@ pub(super) fn gemini_part_to_blocks(part: &Value) -> Vec<ContentBlock> {
                 .get("args")
                 .cloned()
                 .unwrap_or_else(|| Value::Object(Map::new())),
-            extensions: common::empty_extensions(),
+            extensions,
         }];
     }
     vec![ContentBlock::Unknown { raw: part.clone() }]
@@ -313,8 +321,14 @@ pub(super) fn blocks_to_gemini_parts(blocks: &[ContentBlock]) -> Vec<Value> {
                 id,
                 name,
                 arguments,
+                extensions,
                 ..
-            } => function_call_part(Some(id), name, arguments.clone()),
+            } => function_call_part_with_signature(
+                Some(id),
+                name,
+                arguments.clone(),
+                thought_signature_from_extensions(extensions),
+            ),
             ContentBlock::ToolResult {
                 tool_call_id,
                 content,
@@ -362,6 +376,15 @@ pub(super) fn gemini_function_response_id(function_response: &Value) -> String {
 }
 
 pub(super) fn function_call_part(id: Option<&str>, name: &str, args: Value) -> Value {
+    function_call_part_with_signature(id, name, args, None)
+}
+
+pub(super) fn function_call_part_with_signature(
+    id: Option<&str>,
+    name: &str,
+    args: Value,
+    thought_signature: Option<&str>,
+) -> Value {
     let mut function_call = Map::new();
     if let Some(id) = id.filter(|id| !id.is_empty()) {
         function_call.insert("id".to_string(), Value::String(id.to_string()));
@@ -370,6 +393,12 @@ pub(super) fn function_call_part(id: Option<&str>, name: &str, args: Value) -> V
     function_call.insert("args".to_string(), args);
     let mut part = Map::new();
     part.insert("functionCall".to_string(), Value::Object(function_call));
+    if let Some(thought_signature) = thought_signature.filter(|signature| !signature.is_empty()) {
+        part.insert(
+            GEMINI_THOUGHT_SIGNATURE_KEY.to_string(),
+            Value::String(thought_signature.to_string()),
+        );
+    }
     Value::Object(part)
 }
 
@@ -425,6 +454,14 @@ fn gemini_thought_signature(part: &Value) -> Option<String> {
         .and_then(Value::as_str)
         .filter(|signature| !signature.is_empty())
         .map(ToOwned::to_owned)
+}
+
+pub(super) fn thought_signature_from_extensions(extensions: &Extensions) -> Option<&str> {
+    extensions
+        .get(GEMINI_THOUGHT_SIGNATURE_KEY)
+        .or_else(|| extensions.get("thought_signature"))
+        .and_then(Value::as_str)
+        .filter(|signature| !signature.is_empty())
 }
 
 fn data_block(

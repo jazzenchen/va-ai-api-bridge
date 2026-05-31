@@ -161,6 +161,34 @@ fn encodes_tool_results_as_user_function_responses_with_names() {
 }
 
 #[test]
+fn preserves_function_call_thought_signature_in_request_history() {
+    let request = GeminiGenerateContentTranslator
+        .decode_request(json!({
+            "contents": [{
+                "role": "model",
+                "parts": [{
+                    "functionCall": {
+                        "id": "call_pwd",
+                        "name": "exec_command",
+                        "args": { "cmd": "pwd" }
+                    },
+                    "thoughtSignature": "sig_123"
+                }]
+            }]
+        }))
+        .unwrap();
+
+    let wire = GeminiGenerateContentTranslator
+        .encode_request(&request)
+        .unwrap();
+
+    assert_eq!(
+        wire["contents"][0]["parts"][0]["thoughtSignature"],
+        "sig_123"
+    );
+}
+
+#[test]
 fn encodes_gemini_completion_response() {
     let events = GeminiGenerateContentTranslator
         .decode_response(json!({
@@ -189,6 +217,35 @@ fn encodes_gemini_completion_response() {
 }
 
 #[test]
+fn preserves_function_call_thought_signature_in_response_roundtrip() {
+    let events = GeminiGenerateContentTranslator
+        .decode_response(json!({
+            "candidates": [{
+                "content": {
+                    "role": "model",
+                    "parts": [{
+                        "functionCall": {
+                            "id": "call_pwd",
+                            "name": "exec_command",
+                            "args": { "cmd": "pwd" }
+                        },
+                        "thoughtSignature": "sig_123"
+                    }]
+                },
+                "finishReason": "STOP"
+            }]
+        }))
+        .unwrap();
+
+    let response = encode_response(&events);
+
+    assert_eq!(
+        response["candidates"][0]["content"]["parts"][0]["thoughtSignature"],
+        "sig_123"
+    );
+}
+
+#[test]
 fn decodes_gemini_stream_response_id() {
     let mut state = DecodeState::default();
     let events = GeminiGenerateContentTranslator
@@ -207,6 +264,39 @@ fn decodes_gemini_stream_response_id() {
         events.first(),
         Some(UniversalEvent::ResponseStart { id: Some(id), .. }) if id == "resp_stream"
     ));
+}
+
+#[test]
+fn preserves_stream_reasoning_thought_signature_on_content_start() {
+    let mut state = DecodeState::default();
+    let events = GeminiGenerateContentTranslator
+        .decode_stream_chunk(
+            json!({
+                "candidates": [{
+                    "content": {
+                        "role": "model",
+                        "parts": [{
+                            "thought": true,
+                            "text": "Need to inspect cwd.",
+                            "thoughtSignature": "sig_123"
+                        }]
+                    }
+                }]
+            }),
+            &mut state,
+        )
+        .unwrap();
+
+    assert!(events.iter().any(|event| matches!(
+        event,
+        UniversalEvent::ContentStart {
+            block: ContentBlock::Reasoning {
+                encrypted: Some(signature),
+                ..
+            },
+            ..
+        } if signature == "sig_123"
+    )));
 }
 
 #[test]

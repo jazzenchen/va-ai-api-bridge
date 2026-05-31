@@ -100,7 +100,9 @@ fn push_stream_block_events(
             events.push(UniversalEvent::TextDelta { index, text });
         }
         ContentBlock::Reasoning {
-            text: Some(text), ..
+            text: Some(text),
+            encrypted,
+            extensions,
         } if !text.is_empty() => {
             close_stream_content_block(state, TEXT_INDEX_KEY, events);
             let index = stream_content_index(state, REASONING_INDEX_KEY);
@@ -110,8 +112,8 @@ fn push_stream_block_events(
                 index,
                 ContentBlock::Reasoning {
                     text: None,
-                    encrypted: None,
-                    extensions: common::empty_extensions(),
+                    encrypted,
+                    extensions,
                 },
             );
             events.push(UniversalEvent::ReasoningDelta { index, text });

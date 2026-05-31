@@ -6,8 +6,9 @@ use crate::{
 };
 
 use super::shared::{
-    blocks_to_gemini_parts, finish_reason_from_gemini, finish_reason_to_gemini, function_call_part,
-    gemini_part_to_blocks, usage_from_gemini, usage_to_gemini,
+    blocks_to_gemini_parts, finish_reason_from_gemini, finish_reason_to_gemini,
+    function_call_part_with_signature, gemini_part_to_blocks, thought_signature_from_extensions,
+    usage_from_gemini, usage_to_gemini,
 };
 
 pub fn encode_response(events: &[UniversalEvent]) -> Value {
@@ -145,8 +146,14 @@ fn response_parts(response: &UniversalResponse) -> Vec<Value> {
                 id,
                 name,
                 arguments,
+                extensions,
                 ..
-            } => parts.push(function_call_part(Some(id), name, arguments.clone())),
+            } => parts.push(function_call_part_with_signature(
+                Some(id),
+                name,
+                arguments.clone(),
+                thought_signature_from_extensions(extensions),
+            )),
             UniversalItem::Reasoning {
                 text: Some(text), ..
             } if !text.is_empty() => parts.push(json!({ "thought": true, "text": text })),
