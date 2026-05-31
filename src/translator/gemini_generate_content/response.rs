@@ -28,6 +28,9 @@ pub fn encode_response(events: &[UniversalEvent]) -> Value {
     }
 
     let mut out = Map::new();
+    if let Some(id) = response.id {
+        out.insert("responseId".to_string(), Value::String(id));
+    }
     out.insert(
         "candidates".to_string(),
         Value::Array(vec![Value::Object(candidate)]),
@@ -43,7 +46,10 @@ pub fn encode_response(events: &[UniversalEvent]) -> Value {
 
 pub(super) fn decode_response(raw: Value) -> Result<Vec<UniversalEvent>> {
     let mut events = vec![UniversalEvent::ResponseStart {
-        id: None,
+        id: raw
+            .get("responseId")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
         model: raw
             .get("modelVersion")
             .and_then(Value::as_str)

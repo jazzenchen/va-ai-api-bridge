@@ -1,8 +1,8 @@
 use serde_json::json;
 
 use crate::{
-    ContentBlock, EncodeState, FinishReason, Role, UniversalEvent, UniversalItem, UniversalRequest,
-    WireTranslator,
+    ContentBlock, DecodeState, EncodeState, FinishReason, Role, UniversalEvent, UniversalItem,
+    UniversalRequest, WireTranslator,
 };
 
 use super::{encode_response, GeminiGenerateContentTranslator};
@@ -164,6 +164,7 @@ fn encodes_tool_results_as_user_function_responses_with_names() {
 fn encodes_gemini_completion_response() {
     let events = GeminiGenerateContentTranslator
         .decode_response(json!({
+            "responseId": "resp_gemini",
             "candidates": [{
                 "content": { "role": "model", "parts": [{ "text": "pong" }] },
                 "finishReason": "STOP"
@@ -183,7 +184,29 @@ fn encodes_gemini_completion_response() {
         "pong"
     );
     assert_eq!(response["candidates"][0]["finishReason"], "STOP");
+    assert_eq!(response["responseId"], "resp_gemini");
     assert_eq!(response["usageMetadata"]["totalTokenCount"], 2);
+}
+
+#[test]
+fn decodes_gemini_stream_response_id() {
+    let mut state = DecodeState::default();
+    let events = GeminiGenerateContentTranslator
+        .decode_stream_chunk(
+            json!({
+                "responseId": "resp_stream",
+                "candidates": [{
+                    "content": { "role": "model", "parts": [{ "text": "pong" }] }
+                }]
+            }),
+            &mut state,
+        )
+        .unwrap();
+
+    assert!(matches!(
+        events.first(),
+        Some(UniversalEvent::ResponseStart { id: Some(id), .. }) if id == "resp_stream"
+    ));
 }
 
 #[test]
