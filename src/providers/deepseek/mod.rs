@@ -65,11 +65,13 @@ impl DeepSeekBridgeAdapter {
         let Some(request) = chat_request.as_object_mut() else {
             return;
         };
+        let thinking =
+            self.settings.thinking && !has_forced_tool_choice(request.get("tool_choice"));
 
         request.insert(
             "thinking".to_string(),
             json!({
-                "type": if self.settings.thinking {
+                "type": if thinking {
                     "enabled"
                 } else {
                     "disabled"
@@ -80,6 +82,17 @@ impl DeepSeekBridgeAdapter {
 
     pub fn prepare_anthropic_request(&mut self, request: &mut Value) {
         repair_anthropic_thinking_tool_use_order(request);
+        let Some(object) = request.as_object_mut() else {
+            return;
+        };
+        if self.settings.thinking && has_forced_tool_choice(object.get("tool_choice")) {
+            object.insert(
+                "thinking".to_string(),
+                json!({
+                    "type": "disabled"
+                }),
+            );
+        }
     }
 
     fn should_replay_reasoning_content(&self, source: ProviderRequestSource) -> bool {
@@ -97,6 +110,17 @@ impl DeepSeekBridgeAdapter {
         collect_tool_outputs_from_responses_input(original_request, &mut outputs);
         collect_tool_outputs_from_chat_request(chat_request, &mut outputs);
         outputs
+    }
+}
+
+fn has_forced_tool_choice(tool_choice: Option<&Value>) -> bool {
+    match tool_choice {
+        Some(Value::String(value)) => matches!(value.as_str(), "required" | "any"),
+        Some(Value::Object(object)) => object
+            .get("type")
+            .and_then(Value::as_str)
+            .is_some_and(|kind| matches!(kind, "function" | "tool" | "any")),
+        _ => false,
     }
 }
 

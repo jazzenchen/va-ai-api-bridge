@@ -21,6 +21,49 @@ fn default_settings_disable_thinking_for_existing_profiles() {
 }
 
 #[test]
+fn disables_chat_thinking_for_forced_tool_choice() {
+    let mut adapter = DeepSeekBridgeAdapter::new(thinking_settings());
+    let mut request = json!({
+        "model": "deepseek-v4-pro",
+        "messages": [{ "role": "user", "content": "call lookup" }],
+        "tools": [{
+            "type": "function",
+            "function": { "name": "lookup" }
+        }],
+        "tool_choice": {
+            "type": "function",
+            "function": { "name": "lookup" }
+        }
+    });
+
+    adapter.prepare_chat_request(
+        ProviderRequestSource::OpenAiChat,
+        &json!({ "messages": [] }),
+        &mut request,
+    );
+
+    assert_eq!(request["thinking"]["type"], "disabled");
+}
+
+#[test]
+fn disables_anthropic_thinking_for_forced_tool_choice() {
+    let mut adapter = DeepSeekBridgeAdapter::new(thinking_settings());
+    let mut request = json!({
+        "model": "deepseek-v4-pro",
+        "messages": [{ "role": "user", "content": "call lookup" }],
+        "tools": [{
+            "name": "lookup",
+            "input_schema": { "type": "object", "properties": {} }
+        }],
+        "tool_choice": { "type": "tool", "name": "lookup" }
+    });
+
+    adapter.prepare_anthropic_request(&mut request);
+
+    assert_eq!(request["thinking"]["type"], "disabled");
+}
+
+#[test]
 fn replays_reasoning_content_from_responses_history() {
     let settings = thinking_settings();
     let original_request = json!({
