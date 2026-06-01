@@ -12,7 +12,9 @@ use crate::translator::{WireEvent, WireTranslator};
 use crate::{DecodeState, EncodeState, Result, UniversalEvent, UniversalRequest, WireProtocol};
 
 pub use response::encode_response;
-pub use shared::{attach_route_metadata, strip_route_metadata};
+pub use shared::{
+    attach_route_metadata, strip_route_metadata, GEMINI_SKIP_THOUGHT_SIGNATURE_VALIDATOR,
+};
 
 pub struct GeminiGenerateContentTranslator;
 

@@ -33,6 +33,7 @@ pub use stream::{DecodeState, EncodeState, UniversalEvent};
 pub use translator::{
     translator_for_protocol, AnthropicMessagesTranslator, GeminiGenerateContentTranslator,
     OpenAiChatTranslator, OpenAiResponsesTranslator, WireEvent, WireTranslator,
+    GEMINI_SKIP_THOUGHT_SIGNATURE_VALIDATOR,
 };
 pub use universal::{
     ContentBlock, Extensions, FinishReason, GenerationConfig, ReasoningConfig, Role, SourcePayload,

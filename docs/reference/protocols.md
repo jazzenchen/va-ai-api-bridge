@@ -13,7 +13,14 @@ Related official references:
 
 - Anthropic tool use: <https://docs.anthropic.com/en/docs/agents-and-tools/tool-use/overview>
 - Gemini function calling: <https://ai.google.dev/gemini-api/docs/function-calling>
+- Gemini thought signatures: <https://ai.google.dev/gemini-api/docs/thought-signatures>
 - Gemini OpenAI compatibility: <https://ai.google.dev/gemini-api/docs/openai>
+
+## Gemini Thought Signatures
+
+Gemini thinking models may attach `thoughtSignature` to `functionCall` parts and expect that value to be replayed with tool history. The translator keeps real signatures in IR extensions and writes them back when available.
+
+When a host converts tool history from another protocol, such as OpenAI-compatible `tool_calls`, there may be no real Gemini signature to replay. In that case, Gemini request/response encoding writes `skip_thought_signature_validator` on `functionCall` parts as a stateless fallback. This skip value prevents validator failures; it does not reconstruct Gemini's hidden thinking state.
 
 ## Protocol Alias Notes
 

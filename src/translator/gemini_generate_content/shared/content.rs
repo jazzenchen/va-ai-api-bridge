@@ -3,7 +3,7 @@ use serde_json::{json, Map, Value};
 use crate::translator::common;
 use crate::{ContentBlock, Extensions};
 
-use super::GEMINI_THOUGHT_SIGNATURE_KEY;
+use super::{GEMINI_SKIP_THOUGHT_SIGNATURE_VALIDATOR, GEMINI_THOUGHT_SIGNATURE_KEY};
 
 pub(in crate::translator::gemini_generate_content) fn gemini_parts_to_blocks(
     value: &Value,
@@ -210,12 +210,13 @@ pub(in crate::translator::gemini_generate_content) fn function_call_part_with_si
     function_call.insert("args".to_string(), args);
     let mut part = Map::new();
     part.insert("functionCall".to_string(), Value::Object(function_call));
-    if let Some(thought_signature) = thought_signature.filter(|signature| !signature.is_empty()) {
-        part.insert(
-            GEMINI_THOUGHT_SIGNATURE_KEY.to_string(),
-            Value::String(thought_signature.to_string()),
-        );
-    }
+    let thought_signature = thought_signature
+        .filter(|signature| !signature.is_empty())
+        .unwrap_or(GEMINI_SKIP_THOUGHT_SIGNATURE_VALIDATOR);
+    part.insert(
+        GEMINI_THOUGHT_SIGNATURE_KEY.to_string(),
+        Value::String(thought_signature.to_string()),
+    );
     Value::Object(part)
 }
 

@@ -12,7 +12,9 @@ use serde_json::Value;
 use crate::{DecodeState, EncodeState, Result, UniversalEvent, UniversalRequest, WireProtocol};
 
 pub use anthropic_messages::AnthropicMessagesTranslator;
-pub use gemini_generate_content::GeminiGenerateContentTranslator;
+pub use gemini_generate_content::{
+    GeminiGenerateContentTranslator, GEMINI_SKIP_THOUGHT_SIGNATURE_VALIDATOR,
+};
 pub use openai_chat::OpenAiChatTranslator;
 pub use openai_responses::OpenAiResponsesTranslator;
 
