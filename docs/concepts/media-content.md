@@ -20,6 +20,16 @@ Translators map common wire shapes into these blocks:
 
 The crate does not know which profile/model the host will select at runtime, so it does not reject or drop media on its own. A bridge host should compare the final target model's capabilities with the IR before encoding the upstream request.
 
+The target model spec normally comes from host-owned profile/catalog data, not from the request body alone. A host should resolve it in this order:
+
+1. Determine the target provider and target protocol from the route or profile.
+2. Apply any agent-model to upstream-model mapping.
+3. Find the selected endpoint in the host provider catalog.
+4. Merge endpoint-level content capabilities with the selected model's capabilities.
+5. Apply user/profile overrides last when the host allows custom capability flags.
+
+In VibeAround this means the same catalog data can serve two purposes: it can advertise `input_modalities` to clients that understand model metadata, and it can enforce request-side media policy for clients that keep unsupported attachments in history. `va-ai-api-bridge` provides catalog schema structs for this kind of metadata, but the host owns the actual provider catalog and final merge rules.
+
 When a target model does not support image or file input, the safe behavior is to replace the unsupported block with a text placeholder that says the attachment was omitted. The placeholder must not claim to understand the attachment contents.
 
 Recommended image placeholder:
