@@ -3,6 +3,7 @@
 
 pub mod adapter;
 pub mod error;
+pub mod media;
 pub mod protocol;
 pub mod providers;
 pub mod schema;
@@ -14,6 +15,9 @@ pub use adapter::{
     AdapterStreamState, AdapterStreamStep, BridgeContext, BridgeHistory, ProviderAdapter,
 };
 pub use error::{ApiBridgeError, Result};
+pub use media::{
+    sanitize_unsupported_media, sanitize_unsupported_media_from_json, MediaSanitization,
+};
 pub use protocol::WireProtocol;
 pub use providers::{
     DashScopeBridgeAdapter, DeepSeekBridgeAdapter, DeepSeekBridgeSettings, KimiBridgeAdapter,
@@ -22,7 +26,8 @@ pub use providers::{
 };
 pub use schema::{
     ModelCapabilities, ProviderCatalog, ProviderDefaults, ProviderModel, ProviderProtocol,
-    ProviderSetting, SettingKind, SettingOption, PROVIDER_CATALOG_SCHEMA_VERSION,
+    ProviderSetting, ResolvedModelSpec, SettingKind, SettingOption,
+    PROVIDER_CATALOG_SCHEMA_VERSION,
 };
 pub use stream::{DecodeState, EncodeState, UniversalEvent};
 pub use translator::{

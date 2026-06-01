@@ -1,5 +1,6 @@
 use va_ai_api_bridge::{
-    ContentBlock, OpenAiChatTranslator, Role, UniversalItem, UniversalRequest, WireTranslator,
+    sanitize_unsupported_media_from_json, ContentBlock, OpenAiChatTranslator, Role, UniversalItem,
+    UniversalRequest, WireTranslator,
 };
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -24,26 +25,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ..UniversalRequest::default()
     };
 
-    omit_unsupported_media(&mut request, "DeepSeek", "deepseek-v4-pro");
+    let report = sanitize_unsupported_media_from_json(
+        &mut request,
+        serde_json::json!({
+            "providerLabel": "DeepSeek",
+            "model": "deepseek-v4-pro",
+            "capabilities": {
+                "inputModalities": ["text"]
+            }
+        }),
+    )?;
+    eprintln!("image omitted: {}", report.image_omitted);
 
     let upstream_body = OpenAiChatTranslator.encode_request(&request)?;
     println!("{}", serde_json::to_string_pretty(&upstream_body)?);
     Ok(())
-}
-
-fn omit_unsupported_media(request: &mut UniversalRequest, provider: &str, model: &str) {
-    for item in &mut request.input {
-        let UniversalItem::Message { content, .. } = item else {
-            continue;
-        };
-        for block in content {
-            if matches!(block, ContentBlock::Image { .. }) {
-                *block = ContentBlock::Text {
-                    text: format!(
-                        "[Image attachment omitted: {provider} {model} does not support image input. Do not infer image contents; ask the user to describe it or switch models.]"
-                    ),
-                };
-            }
-        }
-    }
 }

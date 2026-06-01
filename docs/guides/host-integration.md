@@ -22,7 +22,7 @@ A host bridge combines this crate with routing, credentials, profiles, model met
 
 ## Capability Policy
 
-Model capability policy should happen after the host knows the final target model. For media, that means replacing unsupported `Image` or `File` blocks with safe text placeholders before target encoding. See [Media content](../concepts/media-content.md).
+Model capability policy should happen after the host knows the final target model. For media, that means building a `ResolvedModelSpec` from the host catalog/profile data, then replacing unsupported `Image` or `File` blocks with safe text placeholders before target encoding. See [Media content](../concepts/media-content.md).
 
 ## What Not To Put In This Crate
 
