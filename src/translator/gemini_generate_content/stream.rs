@@ -1,40 +1,201 @@
 use serde_json::{json, Value};
 
-use crate::translator::WireEvent;
-use crate::{ContentBlock, DecodeState, EncodeState, Result, UniversalEvent, Usage};
+use crate::translator::{common, WireEvent};
+use crate::{
+    ApiBridgeError, ContentBlock, DecodeState, EncodeState, FinishReason, Result, Role,
+    UniversalEvent, Usage,
+};
 
-use super::response::decode_candidates;
 use super::shared::{
-    finish_reason_to_gemini, function_call_part, has_finish_reason, mark_once, usage_from_gemini,
-    usage_to_gemini,
+    finish_reason_from_gemini, finish_reason_to_gemini, function_call_part, gemini_part_to_blocks,
+    has_finish_reason, usage_from_gemini, usage_to_gemini,
 };
 
 const TOOL_ORDER_KEY: &str = "gemini.pendingToolOrder";
 const USAGE_EMITTED_KEY: &str = "gemini.responseDoneUsageEmitted";
+const MESSAGE_ID: &str = "gemini-message-0";
+const NEXT_CONTENT_INDEX_KEY: &str = "gemini.stream.nextContentIndex";
+const TEXT_INDEX_KEY: &str = "gemini.stream.textIndex";
+const REASONING_INDEX_KEY: &str = "gemini.stream.reasoningIndex";
 
 pub(super) fn decode_stream_chunk(
     raw: Value,
     state: &mut DecodeState,
 ) -> Result<Vec<UniversalEvent>> {
     let mut events = Vec::new();
-    if mark_once(state, "gemini.response_start") {
-        events.push(UniversalEvent::ResponseStart {
-            id: None,
-            model: raw
-                .get("modelVersion")
-                .and_then(Value::as_str)
-                .map(ToOwned::to_owned),
-            extensions: crate::translator::common::empty_extensions(),
-        });
-    }
-    decode_candidates(&raw, &mut events, false)?;
+    common::ensure_response_start(
+        &mut events,
+        state,
+        raw.get("responseId")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
+        raw.get("modelVersion")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
+    );
+    decode_stream_candidates(&raw, state, &mut events)?;
     if has_finish_reason(&raw) {
+        close_open_stream_content_blocks(state, &mut events);
+        events.push(UniversalEvent::MessageDone {
+            finish_reason: stream_finish_reason(&raw),
+            usage: usage_from_gemini(raw.get("usageMetadata")),
+            extensions: common::empty_extensions(),
+        });
         events.push(UniversalEvent::ResponseDone {
             usage: usage_from_gemini(raw.get("usageMetadata")),
-            extensions: crate::translator::common::empty_extensions(),
+            extensions: common::empty_extensions(),
         });
     }
     Ok(events)
+}
+
+fn decode_stream_candidates(
+    raw: &Value,
+    state: &mut DecodeState,
+    events: &mut Vec<UniversalEvent>,
+) -> Result<()> {
+    let candidates = raw
+        .get("candidates")
+        .and_then(Value::as_array)
+        .ok_or_else(|| ApiBridgeError::invalid_response("Gemini response missing candidates"))?;
+    let Some(candidate) = candidates.first() else {
+        return Ok(());
+    };
+
+    common::ensure_message_start(events, state, MESSAGE_ID.to_string(), Role::Assistant);
+    let parts = candidate
+        .get("content")
+        .and_then(|content| content.get("parts"))
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    for part in parts {
+        for block in gemini_part_to_blocks(&part) {
+            push_stream_block_events(events, state, block);
+        }
+    }
+    Ok(())
+}
+
+fn push_stream_block_events(
+    events: &mut Vec<UniversalEvent>,
+    state: &mut DecodeState,
+    block: ContentBlock,
+) {
+    match block {
+        ContentBlock::Text { text } => {
+            if text.is_empty() {
+                return;
+            }
+            close_stream_content_block(state, REASONING_INDEX_KEY, events);
+            let index = stream_content_index(state, TEXT_INDEX_KEY);
+            common::ensure_content_start(
+                events,
+                state,
+                index,
+                ContentBlock::Text {
+                    text: String::new(),
+                },
+            );
+            events.push(UniversalEvent::TextDelta { index, text });
+        }
+        ContentBlock::Reasoning {
+            text: Some(text),
+            encrypted,
+            extensions,
+        } if !text.is_empty() => {
+            close_stream_content_block(state, TEXT_INDEX_KEY, events);
+            let index = stream_content_index(state, REASONING_INDEX_KEY);
+            common::ensure_content_start(
+                events,
+                state,
+                index,
+                ContentBlock::Reasoning {
+                    text: None,
+                    encrypted,
+                    extensions,
+                },
+            );
+            events.push(UniversalEvent::ReasoningDelta { index, text });
+        }
+        block => {
+            close_open_stream_content_blocks(state, events);
+            let index = next_stream_content_index(state);
+            common::push_block_events(events, index, block);
+        }
+    }
+}
+
+fn stream_content_index(state: &mut DecodeState, key: &str) -> usize {
+    if let Some(index) = state.extensions.get(key).and_then(Value::as_u64) {
+        return index as usize;
+    }
+    let index = next_stream_content_index(state);
+    state
+        .extensions
+        .insert(key.to_string(), Value::Number((index as u64).into()));
+    index
+}
+
+fn next_stream_content_index(state: &mut DecodeState) -> usize {
+    let index = state
+        .extensions
+        .get(NEXT_CONTENT_INDEX_KEY)
+        .and_then(Value::as_u64)
+        .unwrap_or(0) as usize;
+    state.extensions.insert(
+        NEXT_CONTENT_INDEX_KEY.to_string(),
+        Value::Number(((index + 1) as u64).into()),
+    );
+    index
+}
+
+fn close_open_stream_content_blocks(state: &mut DecodeState, events: &mut Vec<UniversalEvent>) {
+    let mut indexes = [TEXT_INDEX_KEY, REASONING_INDEX_KEY]
+        .into_iter()
+        .filter_map(|key| stream_content_index_to_close(state, key))
+        .collect::<Vec<_>>();
+    indexes.sort_unstable();
+    for index in indexes {
+        if common::mark_once(state, &format!("gemini.stream.contentDone:{index}")) {
+            events.push(UniversalEvent::ContentDone {
+                index,
+                final_block: None,
+            });
+        }
+    }
+}
+
+fn close_stream_content_block(
+    state: &mut DecodeState,
+    key: &str,
+    events: &mut Vec<UniversalEvent>,
+) {
+    let Some(index) = stream_content_index_to_close(state, key) else {
+        return;
+    };
+    if common::mark_once(state, &format!("gemini.stream.contentDone:{index}")) {
+        events.push(UniversalEvent::ContentDone {
+            index,
+            final_block: None,
+        });
+    }
+}
+
+fn stream_content_index_to_close(state: &mut DecodeState, key: &str) -> Option<usize> {
+    state
+        .extensions
+        .remove(key)
+        .and_then(|value| value.as_u64().map(|index| index as usize))
+}
+
+fn stream_finish_reason(raw: &Value) -> Option<FinishReason> {
+    raw.get("candidates")
+        .and_then(Value::as_array)
+        .and_then(|candidates| candidates.first())
+        .and_then(|candidate| candidate.get("finishReason"))
+        .and_then(Value::as_str)
+        .map(finish_reason_from_gemini)
 }
 
 pub(super) fn encode_stream_events(

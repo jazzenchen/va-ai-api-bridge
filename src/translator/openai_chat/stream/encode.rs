@@ -20,7 +20,7 @@ pub(super) fn encode(events: &[UniversalEvent], state: &mut EncodeState) -> Resu
             })),
             UniversalEvent::TextDelta { index, text } => common::wire_event(json!({
                 "choices": [{
-                    "index": index,
+                    "index": choice_index(state, *index),
                     "delta": { "content": text }
                 }]
             })),
@@ -54,7 +54,7 @@ pub(super) fn encode(events: &[UniversalEvent], state: &mut EncodeState) -> Resu
             }
             UniversalEvent::ReasoningDelta { index, text } => common::wire_event(json!({
                 "choices": [{
-                    "index": index,
+                    "index": choice_index(state, *index),
                     "delta": { "reasoning_content": text }
                 }]
             })),
@@ -83,6 +83,10 @@ pub(super) fn encode(events: &[UniversalEvent], state: &mut EncodeState) -> Resu
             }
         })
         .collect())
+}
+
+fn choice_index(_state: &EncodeState, _content_index: usize) -> usize {
+    0
 }
 
 fn tool_call_index(state: &mut EncodeState, id: &str) -> usize {
@@ -159,5 +163,27 @@ mod tests {
             second[0].data["choices"][0]["delta"]["tool_calls"][0]["id"],
             "call_123"
         );
+    }
+
+    #[test]
+    fn encodes_content_indexes_as_single_chat_choice() {
+        let mut state = EncodeState::default();
+        let wire = encode(
+            &[
+                UniversalEvent::TextDelta {
+                    index: 2,
+                    text: "answer".to_string(),
+                },
+                UniversalEvent::ReasoningDelta {
+                    index: 1,
+                    text: "thought".to_string(),
+                },
+            ],
+            &mut state,
+        )
+        .expect("events encode");
+
+        assert_eq!(wire[0].data["choices"][0]["index"], 0);
+        assert_eq!(wire[1].data["choices"][0]["index"], 0);
     }
 }

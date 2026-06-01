@@ -1,65 +1,16 @@
 use std::collections::BTreeMap;
 
-use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::stream::UniversalEvent;
-use crate::WireProtocol;
 
-pub type Extensions = BTreeMap<String, Value>;
-
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct UniversalRequest {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub model: Option<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub instructions: Vec<ContentBlock>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub input: Vec<UniversalItem>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub tools: Vec<UniversalTool>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tool_choice: Option<ToolChoice>,
-    #[serde(default, skip_serializing_if = "is_false")]
-    pub stream: bool,
-    #[serde(default, skip_serializing_if = "GenerationConfig::is_empty")]
-    pub generation: GenerationConfig,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub reasoning: Option<ReasoningConfig>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub source: Option<SourcePayload>,
-    #[serde(default, skip_serializing_if = "Extensions::is_empty")]
-    pub extensions: Extensions,
-}
-
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct UniversalResponse {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub model: Option<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub output: Vec<UniversalItem>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub usage: Option<Usage>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub finish_reason: Option<FinishReason>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub status: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub source: Option<SourcePayload>,
-    #[serde(default, skip_serializing_if = "Extensions::is_empty")]
-    pub extensions: Extensions,
-}
+use super::{ContentBlock, Extensions, Role, UniversalItem, UniversalResponse};
 
 impl UniversalResponse {
     pub fn from_events(events: &[UniversalEvent]) -> Self {
         let mut response = UniversalResponse::default();
         let mut current_message: Option<PartialMessage> = None;
+        let mut pending_tool_calls: Vec<PartialToolCall> = Vec::new();
         let mut pending_reasoning: BTreeMap<usize, String> = BTreeMap::new();
 
         for event in events {
@@ -82,6 +33,7 @@ impl UniversalResponse {
                     extensions,
                 } => {
                     flush_partial_message(&mut response.output, &mut current_message);
+                    flush_pending_tool_calls(&mut response.output, &mut pending_tool_calls);
                     current_message = Some(PartialMessage {
                         id: Some(id.clone()),
                         role: *role,
@@ -90,7 +42,22 @@ impl UniversalResponse {
                     });
                 }
                 UniversalEvent::ContentDone { index, final_block } => {
-                    if let (Some(message), Some(block)) = (&mut current_message, final_block) {
+                    if let Some(ContentBlock::ToolCall {
+                        id,
+                        name,
+                        arguments,
+                        extensions,
+                    }) = final_block
+                    {
+                        remember_tool_call_metadata(
+                            &mut pending_tool_calls,
+                            id,
+                            Some(name),
+                            extensions,
+                        );
+                        fill_tool_call_arguments_if_empty(&mut pending_tool_calls, id, arguments);
+                    } else if let (Some(message), Some(block)) = (&mut current_message, final_block)
+                    {
                         message.content.insert(*index, block.clone());
                     }
                 }
@@ -115,14 +82,12 @@ impl UniversalResponse {
                     arguments_delta,
                 } => {
                     flush_partial_message(&mut response.output, &mut current_message);
-                    response.output.push(UniversalItem::ToolCall {
-                        id: id.clone(),
-                        name: name.clone().unwrap_or_default(),
-                        arguments: arguments_delta
-                            .parse::<Value>()
-                            .unwrap_or_else(|_| Value::String(arguments_delta.clone())),
-                        extensions: Extensions::new(),
-                    });
+                    append_tool_call_delta(
+                        &mut pending_tool_calls,
+                        id,
+                        name.as_deref(),
+                        arguments_delta,
+                    );
                 }
                 UniversalEvent::MessageDone {
                     finish_reason,
@@ -134,11 +99,13 @@ impl UniversalResponse {
                         response.usage = usage.clone();
                     }
                     flush_partial_message(&mut response.output, &mut current_message);
+                    flush_pending_tool_calls(&mut response.output, &mut pending_tool_calls);
                 }
                 UniversalEvent::ResponseDone { usage, extensions } => {
                     if usage.is_some() {
                         response.usage = usage.clone();
                     }
+                    flush_pending_tool_calls(&mut response.output, &mut pending_tool_calls);
                     response.status = Some("completed".to_string());
                     response.extensions.extend(extensions.clone());
                 }
@@ -152,15 +119,32 @@ impl UniversalResponse {
                 }
                 UniversalEvent::Unknown { raw, .. } => {
                     flush_partial_message(&mut response.output, &mut current_message);
+                    flush_pending_tool_calls(&mut response.output, &mut pending_tool_calls);
                     response
                         .output
                         .push(UniversalItem::Unknown { raw: raw.clone() });
                 }
-                UniversalEvent::ContentStart { .. } => {}
+                UniversalEvent::ContentStart { block, .. } => {
+                    if let ContentBlock::ToolCall {
+                        id,
+                        name,
+                        extensions,
+                        ..
+                    } = block
+                    {
+                        remember_tool_call_metadata(
+                            &mut pending_tool_calls,
+                            id,
+                            Some(name),
+                            extensions,
+                        );
+                    }
+                }
             }
         }
 
         flush_partial_message(&mut response.output, &mut current_message);
+        flush_pending_tool_calls(&mut response.output, &mut pending_tool_calls);
         for (index, text) in pending_reasoning {
             response.output.insert(
                 index.min(response.output.len()),
@@ -267,6 +251,14 @@ struct PartialMessage {
     extensions: Extensions,
 }
 
+struct PartialToolCall {
+    id: String,
+    name: Option<String>,
+    arguments: String,
+    saw_delta: bool,
+    extensions: Extensions,
+}
+
 fn flush_partial_message(output: &mut Vec<UniversalItem>, message: &mut Option<PartialMessage>) {
     let Some(message) = message.take() else {
         return;
@@ -277,6 +269,94 @@ fn flush_partial_message(output: &mut Vec<UniversalItem>, message: &mut Option<P
         content: message.content.into_values().collect(),
         extensions: message.extensions,
     });
+}
+
+fn append_tool_call_delta(
+    pending_tool_calls: &mut Vec<PartialToolCall>,
+    id: &str,
+    name: Option<&str>,
+    arguments_delta: &str,
+) {
+    remember_tool_call_metadata(pending_tool_calls, id, name, &Extensions::new());
+    let Some(tool_call) = pending_tool_calls
+        .iter_mut()
+        .find(|tool_call| tool_call.id == id)
+    else {
+        return;
+    };
+
+    tool_call.arguments.push_str(arguments_delta);
+    tool_call.saw_delta = true;
+}
+
+fn remember_tool_call_metadata(
+    pending_tool_calls: &mut Vec<PartialToolCall>,
+    id: &str,
+    name: Option<&str>,
+    extensions: &Extensions,
+) {
+    let Some(tool_call) = pending_tool_calls
+        .iter_mut()
+        .find(|tool_call| tool_call.id == id)
+    else {
+        pending_tool_calls.push(PartialToolCall {
+            id: id.to_string(),
+            name: name
+                .filter(|name| !name.is_empty())
+                .map(ToString::to_string),
+            arguments: String::new(),
+            saw_delta: false,
+            extensions: extensions.clone(),
+        });
+        return;
+    };
+
+    if let Some(name) = name.filter(|name| !name.is_empty()) {
+        tool_call.name = Some(name.to_string());
+    }
+    tool_call.extensions.extend(extensions.clone());
+}
+
+fn fill_tool_call_arguments_if_empty(
+    pending_tool_calls: &mut Vec<PartialToolCall>,
+    id: &str,
+    arguments: &Value,
+) {
+    let Some(tool_call) = pending_tool_calls
+        .iter_mut()
+        .find(|tool_call| tool_call.id == id)
+    else {
+        return;
+    };
+    if tool_call.saw_delta || !tool_call.arguments.is_empty() {
+        return;
+    }
+    tool_call.arguments = stringify_tool_arguments(arguments);
+}
+
+fn flush_pending_tool_calls(
+    output: &mut Vec<UniversalItem>,
+    pending_tool_calls: &mut Vec<PartialToolCall>,
+) {
+    for tool_call in std::mem::take(pending_tool_calls) {
+        output.push(UniversalItem::ToolCall {
+            id: tool_call.id,
+            name: tool_call.name.unwrap_or_default(),
+            arguments: tool_call
+                .arguments
+                .parse::<Value>()
+                .unwrap_or_else(|_| Value::String(tool_call.arguments)),
+            extensions: tool_call.extensions,
+        });
+    }
+}
+
+fn stringify_tool_arguments(arguments: &Value) -> String {
+    match arguments {
+        Value::String(value) => value.clone(),
+        Value::Null => String::new(),
+        value => serde_json::to_string(value).unwrap_or_default(),
+    }
 }
 
 fn append_text_block(content: &mut BTreeMap<usize, ContentBlock>, index: usize, text: &str) {
@@ -313,215 +393,36 @@ fn append_reasoning_block(content: &mut BTreeMap<usize, ContentBlock>, index: us
         }
     }
 }
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(
-    tag = "type",
-    rename_all = "snake_case",
-    rename_all_fields = "camelCase"
-)]
-pub enum UniversalItem {
-    Message {
-        role: Role,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        id: Option<String>,
-        #[serde(default, skip_serializing_if = "Vec::is_empty")]
-        content: Vec<ContentBlock>,
-        #[serde(default, skip_serializing_if = "Extensions::is_empty")]
-        extensions: Extensions,
-    },
-    ToolCall {
-        id: String,
-        name: String,
-        arguments: Value,
-        #[serde(default, skip_serializing_if = "Extensions::is_empty")]
-        extensions: Extensions,
-    },
-    ToolResult {
-        tool_call_id: String,
-        #[serde(default, skip_serializing_if = "Vec::is_empty")]
-        content: Vec<ContentBlock>,
-        #[serde(default, skip_serializing_if = "is_false")]
-        is_error: bool,
-        #[serde(default, skip_serializing_if = "Extensions::is_empty")]
-        extensions: Extensions,
-    },
-    Reasoning {
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        id: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        text: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        encrypted: Option<String>,
-        #[serde(default, skip_serializing_if = "Extensions::is_empty")]
-        extensions: Extensions,
-    },
-    Unknown {
-        raw: Value,
-    },
-}
+    use crate::{UniversalEvent, UniversalItem, UniversalResponse};
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(
-    tag = "type",
-    rename_all = "snake_case",
-    rename_all_fields = "camelCase"
-)]
-pub enum ContentBlock {
-    Text {
-        text: String,
-    },
-    Image {
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        media_type: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        url: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        data: Option<String>,
-        #[serde(default, skip_serializing_if = "Extensions::is_empty")]
-        extensions: Extensions,
-    },
-    File {
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        media_type: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        filename: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        url: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        data: Option<String>,
-        #[serde(default, skip_serializing_if = "Extensions::is_empty")]
-        extensions: Extensions,
-    },
-    ToolCall {
-        id: String,
-        name: String,
-        arguments: Value,
-        #[serde(default, skip_serializing_if = "Extensions::is_empty")]
-        extensions: Extensions,
-    },
-    ToolResult {
-        tool_call_id: String,
-        #[serde(default, skip_serializing_if = "Vec::is_empty")]
-        content: Vec<ContentBlock>,
-        #[serde(default, skip_serializing_if = "is_false")]
-        is_error: bool,
-        #[serde(default, skip_serializing_if = "Extensions::is_empty")]
-        extensions: Extensions,
-    },
-    Reasoning {
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        text: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        encrypted: Option<String>,
-        #[serde(default, skip_serializing_if = "Extensions::is_empty")]
-        extensions: Extensions,
-    },
-    Unknown {
-        raw: Value,
-    },
-}
+    #[test]
+    fn aggregates_split_tool_call_deltas_by_id() {
+        let response = UniversalResponse::from_events(&[
+            UniversalEvent::ToolCallDelta {
+                id: "call_pwd".to_string(),
+                name: Some("exec_command".to_string()),
+                arguments_delta: "{\"cmd\"".to_string(),
+            },
+            UniversalEvent::ToolCallDelta {
+                id: "call_pwd".to_string(),
+                name: None,
+                arguments_delta: ":\"pwd\"}".to_string(),
+            },
+        ]);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Role {
-    Developer,
-    System,
-    User,
-    Assistant,
-    Tool,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(
-    tag = "type",
-    rename_all = "snake_case",
-    rename_all_fields = "camelCase"
-)]
-pub enum ToolChoice {
-    Auto,
-    None,
-    Required,
-    Tool { name: String },
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct UniversalTool {
-    pub name: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub input_schema: Option<Value>,
-    #[serde(default, skip_serializing_if = "Extensions::is_empty")]
-    pub extensions: Extensions,
-}
-
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct GenerationConfig {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub temperature: Option<f64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub top_p: Option<f64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub max_output_tokens: Option<u64>,
-    #[serde(default, skip_serializing_if = "Extensions::is_empty")]
-    pub extensions: Extensions,
-}
-
-impl GenerationConfig {
-    pub fn is_empty(&self) -> bool {
-        self.temperature.is_none()
-            && self.top_p.is_none()
-            && self.max_output_tokens.is_none()
-            && self.extensions.is_empty()
+        assert_eq!(response.output.len(), 1);
+        assert!(matches!(
+            &response.output[0],
+            UniversalItem::ToolCall {
+                id,
+                name,
+                arguments,
+                ..
+            } if id == "call_pwd" && name == "exec_command" && arguments == &json!({ "cmd": "pwd" })
+        ));
     }
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ReasoningConfig {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub effort: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub budget_tokens: Option<u64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub visible: Option<bool>,
-    #[serde(default, skip_serializing_if = "Extensions::is_empty")]
-    pub extensions: Extensions,
-}
-
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Usage {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub input_tokens: Option<u64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub output_tokens: Option<u64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub total_tokens: Option<u64>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum FinishReason {
-    Stop,
-    Length,
-    ToolCall,
-    ContentFilter,
-    Error,
-    Unknown,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SourcePayload {
-    pub protocol: WireProtocol,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub raw: Option<Value>,
-}
-
-fn is_false(value: &bool) -> bool {
-    !*value
 }

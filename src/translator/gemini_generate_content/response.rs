@@ -6,8 +6,9 @@ use crate::{
 };
 
 use super::shared::{
-    blocks_to_gemini_parts, finish_reason_from_gemini, finish_reason_to_gemini, function_call_part,
-    gemini_part_to_blocks, usage_from_gemini, usage_to_gemini,
+    blocks_to_gemini_parts, finish_reason_from_gemini, finish_reason_to_gemini,
+    function_call_part_with_signature, gemini_part_to_blocks, thought_signature_from_extensions,
+    usage_from_gemini, usage_to_gemini,
 };
 
 pub fn encode_response(events: &[UniversalEvent]) -> Value {
@@ -28,6 +29,9 @@ pub fn encode_response(events: &[UniversalEvent]) -> Value {
     }
 
     let mut out = Map::new();
+    if let Some(id) = response.id {
+        out.insert("responseId".to_string(), Value::String(id));
+    }
     out.insert(
         "candidates".to_string(),
         Value::Array(vec![Value::Object(candidate)]),
@@ -43,7 +47,10 @@ pub fn encode_response(events: &[UniversalEvent]) -> Value {
 
 pub(super) fn decode_response(raw: Value) -> Result<Vec<UniversalEvent>> {
     let mut events = vec![UniversalEvent::ResponseStart {
-        id: None,
+        id: raw
+            .get("responseId")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
         model: raw
             .get("modelVersion")
             .and_then(Value::as_str)
@@ -139,8 +146,14 @@ fn response_parts(response: &UniversalResponse) -> Vec<Value> {
                 id,
                 name,
                 arguments,
+                extensions,
                 ..
-            } => parts.push(function_call_part(Some(id), name, arguments.clone())),
+            } => parts.push(function_call_part_with_signature(
+                Some(id),
+                name,
+                arguments.clone(),
+                thought_signature_from_extensions(extensions),
+            )),
             UniversalItem::Reasoning {
                 text: Some(text), ..
             } if !text.is_empty() => parts.push(json!({ "thought": true, "text": text })),

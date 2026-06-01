@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use serde_json::{json, Map, Value};
 
 use crate::translator::common;
@@ -6,11 +8,13 @@ use crate::{
 };
 
 use super::shared::{
-    blocks_to_gemini_parts, decode_tool_choice, decode_tools, function_call_part,
-    function_response_part, gemini_function_call_id, gemini_function_response_id,
-    gemini_part_to_blocks, gemini_parts_to_blocks, gemini_role_to_universal,
-    generation_from_gemini, generation_to_gemini, model_from_route_segment, stringify_json,
-    tool_choice_to_gemini, tools_to_gemini, universal_role_to_gemini, VA_MODEL_KEY, VA_STREAM_KEY,
+    blocks_to_gemini_parts, decode_tool_choice, decode_tools, field,
+    function_call_part_with_signature, function_response_part, gemini_function_call_id,
+    gemini_function_response_id, gemini_part_to_blocks, gemini_parts_to_blocks,
+    gemini_role_to_universal, generation_from_gemini, generation_to_gemini,
+    model_from_route_segment, stringify_json, thought_signature_from_extensions,
+    tool_choice_to_gemini, tools_to_gemini, universal_role_to_gemini, GEMINI_THOUGHT_SIGNATURE_KEY,
+    VA_MODEL_KEY, VA_STREAM_KEY,
 };
 
 pub(super) fn decode_request(raw: Value) -> Result<UniversalRequest> {
@@ -27,17 +31,18 @@ pub(super) fn decode_request(raw: Value) -> Result<UniversalRequest> {
             .get(VA_STREAM_KEY)
             .and_then(Value::as_bool)
             .unwrap_or(false),
-        generation: generation_from_gemini(object.get("generationConfig")),
+        generation: generation_from_gemini(field(object, "generationConfig", "generation_config")),
         source: Some(common::source(
             WireProtocol::GeminiGenerateContent,
             source_raw,
         )),
         ..UniversalRequest::default()
     };
-    request.instructions = decode_system_instruction(object.get("systemInstruction"));
+    request.instructions =
+        decode_system_instruction(field(object, "systemInstruction", "system_instruction"));
     request.input = decode_contents(object.get("contents"))?;
     request.tools = decode_tools(object.get("tools"));
-    request.tool_choice = decode_tool_choice(object.get("toolConfig"));
+    request.tool_choice = decode_tool_choice(field(object, "toolConfig", "tool_config"));
     Ok(request)
 }
 
@@ -79,8 +84,10 @@ fn decode_system_instruction(value: Option<&Value>) -> Vec<ContentBlock> {
 }
 
 fn decode_contents(value: Option<&Value>) -> Result<Vec<UniversalItem>> {
-    let Some(contents) = value.and_then(Value::as_array) else {
-        return Ok(Vec::new());
+    let contents = match value {
+        Some(Value::Array(contents)) => contents.as_slice(),
+        Some(single @ Value::Object(_)) => std::slice::from_ref(single),
+        _ => return Ok(Vec::new()),
     };
     let mut out = Vec::new();
     for content in contents {
@@ -89,18 +96,24 @@ fn decode_contents(value: Option<&Value>) -> Result<Vec<UniversalItem>> {
             .and_then(Value::as_str)
             .map(gemini_role_to_universal)
             .unwrap_or(Role::User);
-        let parts = content.get("parts").and_then(Value::as_array);
+        let parts = content.get("parts");
         let mut message_blocks = Vec::new();
         if let Some(parts) = parts {
-            for part in parts {
-                if let Some(function_response) = part.get("functionResponse") {
+            for part in parts_array_or_single(parts) {
+                if let Some(function_response) = part
+                    .get("functionResponse")
+                    .or_else(|| part.get("function_response"))
+                {
                     push_message_if_any(&mut out, role, &mut message_blocks);
                     out.push(function_response_to_tool_result(function_response));
                     continue;
                 }
-                if let Some(function_call) = part.get("functionCall") {
+                if let Some(function_call) = part
+                    .get("functionCall")
+                    .or_else(|| part.get("function_call"))
+                {
                     push_message_if_any(&mut out, role, &mut message_blocks);
-                    out.push(function_call_to_tool_call(function_call));
+                    out.push(function_call_to_tool_call(function_call, part));
                     continue;
                 }
                 message_blocks.extend(gemini_part_to_blocks(part));
@@ -126,7 +139,16 @@ fn function_response_to_tool_result(function_response: &Value) -> UniversalItem 
     }
 }
 
-fn function_call_to_tool_call(function_call: &Value) -> UniversalItem {
+fn function_call_to_tool_call(function_call: &Value, part: &Value) -> UniversalItem {
+    let mut extensions = common::empty_extensions();
+    if let Some(signature) = part
+        .get(GEMINI_THOUGHT_SIGNATURE_KEY)
+        .or_else(|| part.get("thought_signature"))
+        .and_then(Value::as_str)
+        .filter(|signature| !signature.is_empty())
+    {
+        extensions.insert(GEMINI_THOUGHT_SIGNATURE_KEY.to_string(), json!(signature));
+    }
     let name = function_call
         .get("name")
         .and_then(Value::as_str)
@@ -139,7 +161,7 @@ fn function_call_to_tool_call(function_call: &Value) -> UniversalItem {
             .get("args")
             .cloned()
             .unwrap_or_else(|| Value::Object(Map::new())),
-        extensions: common::empty_extensions(),
+        extensions,
     }
 }
 
@@ -161,6 +183,7 @@ fn push_message_if_any(
 
 fn items_to_contents(items: &[UniversalItem]) -> Vec<Value> {
     let mut contents = Vec::new();
+    let mut tool_names_by_id = BTreeMap::new();
     for item in items {
         match item {
             UniversalItem::Message { role, content, .. } => {
@@ -175,20 +198,28 @@ fn items_to_contents(items: &[UniversalItem]) -> Vec<Value> {
                 is_error,
                 ..
             } => {
+                let tool_name = tool_names_by_id.get(tool_call_id).map(String::as_str);
                 contents.push(json!({
-                    "role": "function",
-                    "parts": [function_response_part(Some(tool_call_id), None, content, *is_error)]
+                    "role": "user",
+                    "parts": [function_response_part(Some(tool_call_id), tool_name, content, *is_error)]
                 }));
             }
             UniversalItem::ToolCall {
                 id,
                 name,
                 arguments,
+                extensions,
                 ..
             } => {
+                tool_names_by_id.insert(id.clone(), name.clone());
                 contents.push(json!({
                     "role": "model",
-                    "parts": [function_call_part(Some(id), name, arguments.clone())]
+                    "parts": [function_call_part_with_signature(
+                        Some(id),
+                        name,
+                        arguments.clone(),
+                        thought_signature_from_extensions(extensions)
+                    )]
                 }));
             }
             UniversalItem::Reasoning { .. } => {}
@@ -196,4 +227,12 @@ fn items_to_contents(items: &[UniversalItem]) -> Vec<Value> {
         }
     }
     contents
+}
+
+fn parts_array_or_single(value: &Value) -> Vec<&Value> {
+    match value {
+        Value::Array(parts) => parts.iter().collect(),
+        Value::Object(_) => vec![value],
+        _ => Vec::new(),
+    }
 }

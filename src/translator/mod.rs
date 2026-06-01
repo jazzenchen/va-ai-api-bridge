@@ -45,3 +45,29 @@ pub trait WireTranslator {
         state: &mut EncodeState,
     ) -> Result<Vec<WireEvent>>;
 }
+
+pub fn translator_for_protocol(protocol: WireProtocol) -> Box<dyn WireTranslator> {
+    match protocol {
+        WireProtocol::OpenAiResponses => Box::new(OpenAiResponsesTranslator),
+        WireProtocol::OpenAiChat => Box::new(OpenAiChatTranslator),
+        WireProtocol::AnthropicMessages => Box::new(AnthropicMessagesTranslator),
+        WireProtocol::GeminiGenerateContent => Box::new(GeminiGenerateContentTranslator),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{translator::translator_for_protocol, WireProtocol};
+
+    #[test]
+    fn creates_translator_for_each_wire_protocol() {
+        for protocol in [
+            WireProtocol::OpenAiResponses,
+            WireProtocol::OpenAiChat,
+            WireProtocol::AnthropicMessages,
+            WireProtocol::GeminiGenerateContent,
+        ] {
+            assert_eq!(translator_for_protocol(protocol).protocol(), protocol);
+        }
+    }
+}
