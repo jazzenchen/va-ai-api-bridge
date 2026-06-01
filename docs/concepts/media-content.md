@@ -28,7 +28,25 @@ The target model spec normally comes from host-owned profile/catalog data, not f
 4. Merge endpoint-level content capabilities with the selected model's capabilities.
 5. Apply user/profile overrides last when the host allows custom capability flags.
 
-In VibeAround this means the same catalog data can serve two purposes: it can advertise `input_modalities` to clients that understand model metadata, and it can enforce request-side media policy for clients that keep unsupported attachments in history. `va-ai-api-bridge` provides catalog schema structs for this kind of metadata, but the host owns the actual provider catalog and final merge rules.
+`va-ai-api-bridge` provides `ResolvedModelSpec` and `ModelCapabilities` for this handoff. A host can either deserialize a JSON model spec and call `sanitize_unsupported_media_from_json`, or deserialize the same JSON itself and call `sanitize_unsupported_media` with the typed `ResolvedModelSpec`.
+
+```rust
+use serde_json::json;
+use va_ai_api_bridge::sanitize_unsupported_media_from_json;
+
+let report = sanitize_unsupported_media_from_json(
+    &mut universal_request,
+    json!({
+        "providerLabel": "DeepSeek",
+        "model": "deepseek-v4-pro",
+        "capabilities": {
+            "inputModalities": ["text"]
+        }
+    }),
+)?;
+```
+
+In VibeAround this means the same catalog data can serve two purposes: it can advertise `input_modalities` to clients that understand model metadata, and it can enforce request-side media policy for clients that keep unsupported attachments in history. The host still owns the actual provider catalog and final merge rules.
 
 When a target model does not support image or file input, the safe behavior is to replace the unsupported block with a text placeholder that says the attachment was omitted. The placeholder must not claim to understand the attachment contents.
 
@@ -54,7 +72,7 @@ Apply media capability policy after source decode and model mapping, but before 
 source wire request
   -> decode to UniversalRequest
   -> choose/map target model
-  -> replace unsupported Image/File blocks with text placeholders
+  -> call sanitize_unsupported_media(...) with the resolved model spec
   -> encode target wire request
   -> apply provider adapter
   -> send upstream
