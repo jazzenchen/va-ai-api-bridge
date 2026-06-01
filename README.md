@@ -4,10 +4,55 @@
 
 The crate is intentionally not an HTTP gateway. It does not perform networking, store credentials, own model routing, retry upstreams, or persist chat history. It focuses on the translation layer: wire payloads, protocol-neutral IR, streaming events, and provider-specific package transforms.
 
+## Install
+
+```bash
+cargo add va-ai-api-bridge serde_json
+```
+
+Or add it manually:
+
+```toml
+[dependencies]
+va-ai-api-bridge = "0.1.4"
+serde_json = "1"
+```
+
+The package name uses hyphens on crates.io, while Rust imports use underscores: `va_ai_api_bridge`.
+
+## Quick Example
+
+Decode an OpenAI Chat Completions request into the universal IR, then encode it as an Anthropic Messages request:
+
+```rust
+use serde_json::json;
+use va_ai_api_bridge::{AnthropicMessagesTranslator, OpenAiChatTranslator, WireTranslator};
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let source = OpenAiChatTranslator;
+    let target = AnthropicMessagesTranslator;
+
+    let universal = source.decode_request(json!({
+        "model": "gpt-4.1",
+        "messages": [
+            { "role": "system", "content": "You are concise." },
+            { "role": "user", "content": "Say hello." }
+        ]
+    }))?;
+
+    let anthropic_body = target.encode_request(&universal)?;
+    println!("{}", serde_json::to_string_pretty(&anthropic_body)?);
+
+    Ok(())
+}
+```
+
 ## Documentation
 
 Start with the [documentation index](docs/README.md).
 
+- [Crates.io package](https://crates.io/crates/va-ai-api-bridge)
+- [API docs](https://docs.rs/va-ai-api-bridge)
 - [Getting started](docs/guides/getting-started.md): minimal request translation and dynamic translator dispatch.
 - [Host integration](docs/guides/host-integration.md): where a bridge host should decode, sanitize, adapt, encode, and send requests.
 - [Architecture](docs/concepts/architecture.md): crate layers and data flow.

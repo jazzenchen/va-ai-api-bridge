@@ -2,6 +2,28 @@
 
 This guide shows the smallest useful SDK flow: decode one protocol into IR and encode it into another protocol.
 
+## Install
+
+Use the published crate from crates.io:
+
+```bash
+cargo add va-ai-api-bridge serde_json
+```
+
+Or add the dependencies manually:
+
+```toml
+[dependencies]
+va-ai-api-bridge = "0.1.4"
+serde_json = "1"
+```
+
+The package name uses hyphens on crates.io. Rust imports use underscores:
+
+```rust
+use va_ai_api_bridge::OpenAiChatTranslator;
+```
+
 ## Translate a Request
 
 ```rust
