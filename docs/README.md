@@ -33,5 +33,6 @@ The `examples/` directory contains minimal runnable programs that mirror the gui
 
 - `translate_request`: decode OpenAI Chat and encode Anthropic Messages.
 - `provider_adapter`: apply a DeepSeek adapter after OpenAI Responses to Chat translation.
-- `media_policy`: pass a resolved model spec and replace unsupported image input before target encode.
+- `media_policy`: pass a resolved model spec as JSON and replace unsupported image input before target encode.
+- `media_policy_typed`: pass a typed `ResolvedModelSpec` and replace unsupported image input before target encode.
 - `stream_events`: encode a `UniversalEvent` sequence into OpenAI Chat stream chunks.

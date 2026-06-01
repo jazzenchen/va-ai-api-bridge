@@ -24,6 +24,21 @@ A host bridge combines this crate with routing, credentials, profiles, model met
 
 Model capability policy should happen after the host knows the final target model. For media, that means building a `ResolvedModelSpec` from the host catalog/profile data, then replacing unsupported `Image` or `File` blocks with safe text placeholders before target encoding. See [Media content](../concepts/media-content.md).
 
+The host can pass the final model metadata either as JSON or as a typed struct:
+
+```rust
+use va_ai_api_bridge::{sanitize_unsupported_media, ResolvedModelSpec, UniversalRequest};
+
+fn apply_model_policy(request: &mut UniversalRequest, model: &ResolvedModelSpec) {
+    let report = sanitize_unsupported_media(request, model);
+    if report.changed() {
+        // The host may log this without recording attachment bytes or user content.
+    }
+}
+```
+
+The resolved model spec should represent the final upstream model after alias mapping and profile overrides. Endpoint-level capabilities and model-level capabilities can be merged with `ModelCapabilities::union`.
+
 ## What Not To Put In This Crate
 
 Do not add host concerns to `va-ai-api-bridge`:
