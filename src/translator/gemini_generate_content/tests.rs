@@ -125,6 +125,56 @@ fn decodes_snake_case_generate_content_request() {
 }
 
 #[test]
+fn encodes_anthropic_tool_schema_as_gemini_schema_subset() {
+    let request = AnthropicMessagesTranslator
+        .decode_request(json!({
+            "model": "claude-code",
+            "messages": [{ "role": "user", "content": "hi" }],
+            "tools": [{
+                "name": "List",
+                "description": "List rules",
+                "input_schema": {
+                    "$schema": "https://json-schema.org/draft/2020-12/schema",
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                        "filters": {
+                            "type": "object",
+                            "propertyNames": { "pattern": "^[a-z]+$" },
+                            "additionalProperties": { "type": "string" },
+                            "properties": {
+                                "name": { "type": "string" }
+                            }
+                        }
+                    },
+                    "required": ["filters"]
+                }
+            }]
+        }))
+        .unwrap();
+
+    let wire = GeminiGenerateContentTranslator
+        .encode_request(&request)
+        .unwrap();
+    let parameters = &wire["tools"][0]["functionDeclarations"][0]["parameters"];
+
+    assert!(parameters.get("$schema").is_none());
+    assert!(parameters.get("additionalProperties").is_none());
+    assert_eq!(parameters["type"], "object");
+    assert_eq!(parameters["required"], json!(["filters"]));
+    assert!(parameters["properties"]["filters"]
+        .get("propertyNames")
+        .is_none());
+    assert!(parameters["properties"]["filters"]
+        .get("additionalProperties")
+        .is_none());
+    assert_eq!(
+        parameters["properties"]["filters"]["properties"]["name"]["type"],
+        "string"
+    );
+}
+
+#[test]
 fn encodes_tool_results_as_user_function_responses_with_names() {
     let request = UniversalRequest {
         input: vec![

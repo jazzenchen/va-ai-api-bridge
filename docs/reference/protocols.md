@@ -22,6 +22,10 @@ Gemini thinking models may attach `thoughtSignature` to `functionCall` parts and
 
 When a host converts tool history from another protocol, such as OpenAI-compatible `tool_calls`, there may be no real Gemini signature to replay. In that case, Gemini request/response encoding writes `skip_thought_signature_validator` on `functionCall` parts as a stateless fallback. This skip value prevents validator failures; it does not reconstruct Gemini's hidden thinking state.
 
+## Gemini Tool Schemas
+
+Gemini `functionDeclarations[].parameters` uses the API `Schema` object, not a full JSON Schema draft. When encoding Gemini requests, the translator recursively keeps supported Schema fields and drops unsupported draft keywords such as `$schema`, `additionalProperties`, and `propertyNames`. This keeps cross-protocol tools from Claude or OpenAI-compatible agents within Gemini's accepted request shape.
+
 ## Protocol Alias Notes
 
 Hosts may expose shorter route names such as `anthropic` or `gemini`, but the SDK-level enum uses explicit protocol names. Keep host route aliases outside the crate so the public SDK API remains unambiguous.
