@@ -4,6 +4,7 @@ pub(in crate::translator::gemini_generate_content) const VA_MODEL_KEY: &str = "_
 pub(in crate::translator::gemini_generate_content) const VA_STREAM_KEY: &str = "__va_stream";
 pub(in crate::translator::gemini_generate_content) const GEMINI_THOUGHT_SIGNATURE_KEY: &str =
     "thoughtSignature";
+pub const GEMINI_SKIP_THOUGHT_SIGNATURE_VALIDATOR: &str = "skip_thought_signature_validator";
 
 pub fn attach_route_metadata(body: &mut Value, model: &str, stream: bool) {
     let Some(object) = body.as_object_mut() else {

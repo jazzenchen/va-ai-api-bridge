@@ -39,6 +39,10 @@ fn apply_model_policy(request: &mut UniversalRequest, model: &ResolvedModelSpec)
 
 The resolved model spec should represent the final upstream model after alias mapping and profile overrides. Endpoint-level capabilities and model-level capabilities can be merged with `ModelCapabilities::union`.
 
+## Gemini Tool History
+
+Gemini thinking models can require `thoughtSignature` values on replayed `functionCall` history. The SDK preserves real signatures when they are present in Gemini wire payloads. If a host routes OpenAI-compatible or other cross-protocol tool history into Gemini and no real signature exists, Gemini encoding uses `skip_thought_signature_validator` as a stateless fallback. This avoids Gemini rejecting the request, but it is not equivalent to replaying a real model-generated signature.
+
 ## What Not To Put In This Crate
 
 Do not add host concerns to `va-ai-api-bridge`:

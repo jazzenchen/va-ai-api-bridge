@@ -5,7 +5,9 @@ use crate::{
     UniversalEvent, UniversalItem, UniversalRequest, WireTranslator,
 };
 
-use super::{encode_response, GeminiGenerateContentTranslator};
+use super::{
+    encode_response, GeminiGenerateContentTranslator, GEMINI_SKIP_THOUGHT_SIGNATURE_VALIDATOR,
+};
 
 #[test]
 fn decodes_generate_content_request() {
@@ -157,6 +159,28 @@ fn encodes_tool_results_as_user_function_responses_with_names() {
     assert_eq!(
         wire["contents"][1]["parts"][0]["functionResponse"]["name"],
         "exec_command"
+    );
+}
+
+#[test]
+fn adds_dummy_thought_signature_to_function_calls_without_signature() {
+    let request = UniversalRequest {
+        input: vec![UniversalItem::ToolCall {
+            id: "call_pwd".to_string(),
+            name: "exec_command".to_string(),
+            arguments: json!({ "cmd": "pwd" }),
+            extensions: Default::default(),
+        }],
+        ..UniversalRequest::default()
+    };
+
+    let wire = GeminiGenerateContentTranslator
+        .encode_request(&request)
+        .unwrap();
+
+    assert_eq!(
+        wire["contents"][0]["parts"][0]["thoughtSignature"],
+        GEMINI_SKIP_THOUGHT_SIGNATURE_VALIDATOR
     );
 }
 
@@ -495,5 +519,9 @@ fn stream_encoder_buffers_tool_call_until_arguments_are_complete() {
     assert_eq!(function_call["id"], "call_pwd");
     assert_eq!(function_call["name"], "exec_command");
     assert_eq!(function_call["args"]["cmd"], "pwd");
+    assert_eq!(
+        candidate["content"]["parts"][0]["thoughtSignature"],
+        GEMINI_SKIP_THOUGHT_SIGNATURE_VALIDATOR
+    );
     assert_eq!(candidate["finishReason"], "STOP");
 }

@@ -3,7 +3,9 @@ mod mapping;
 mod route;
 mod tools;
 
-pub use route::{attach_route_metadata, strip_route_metadata};
+pub use route::{
+    attach_route_metadata, strip_route_metadata, GEMINI_SKIP_THOUGHT_SIGNATURE_VALIDATOR,
+};
 
 pub(super) use content::{
     blocks_to_gemini_parts, function_call_part, function_call_part_with_signature,
