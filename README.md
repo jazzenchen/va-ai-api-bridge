@@ -74,4 +74,5 @@ Runnable examples live under `examples/`:
 
 - `cargo run --example translate_request`
 - `cargo run --example provider_adapter`
+- `cargo run --example media_policy`
 - `cargo run --example stream_events`

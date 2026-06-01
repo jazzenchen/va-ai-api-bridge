@@ -30,3 +30,8 @@ This documentation explains what the crate is, how the translation model works, 
 ## Examples
 
 The `examples/` directory contains minimal runnable programs that mirror the guide flows. Use them as integration sketches, not as a full server implementation.
+
+- `translate_request`: decode OpenAI Chat and encode Anthropic Messages.
+- `provider_adapter`: apply a DeepSeek adapter after OpenAI Responses to Chat translation.
+- `media_policy`: replace unsupported image input with a safe text placeholder before target encode.
+- `stream_events`: encode a `UniversalEvent` sequence into OpenAI Chat stream chunks.
