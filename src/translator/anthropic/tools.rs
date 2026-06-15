@@ -56,6 +56,7 @@ pub(crate) fn anthropic_tool_from_value(value: &Value) -> Option<UniversalTool> 
             .and_then(Value::as_str)
             .map(ToString::to_string),
         input_schema: object.get("input_schema").cloned(),
+        strict: None,
         extensions: empty_extensions(),
     })
 }
@@ -192,6 +193,7 @@ mod tests {
                 },
                 "additionalProperties": null
             })),
+            strict: None,
             extensions: Default::default(),
         };
 
@@ -215,6 +217,7 @@ mod tests {
                     }
                 }
             })),
+            strict: None,
             extensions: Default::default(),
         };
 
@@ -237,6 +240,7 @@ mod tests {
             name: "example".to_string(),
             description: None,
             input_schema: Some(Value::Null),
+            strict: None,
             extensions: Default::default(),
         };
 
@@ -257,6 +261,7 @@ mod tests {
             name: "example".to_string(),
             description: None,
             input_schema: None,
+            strict: None,
             extensions: Default::default(),
         };
 
@@ -277,6 +282,7 @@ mod tests {
             name: "example".to_string(),
             description: None,
             input_schema: Some(json!({})),
+            strict: None,
             extensions: Default::default(),
         };
 
@@ -298,5 +304,33 @@ mod tests {
             "input_schema": { "type": "object" }
         }))
         .is_none());
+    }
+
+    #[test]
+    fn ignores_anthropic_top_level_strict_tool_setting() {
+        let tool = anthropic_tool_from_value(&json!({
+            "name": "search",
+            "input_schema": { "type": "object" },
+            "strict": true
+        }))
+        .expect("tool");
+
+        assert_eq!(tool.strict, None);
+    }
+
+    #[test]
+    fn drops_strict_for_anthropic_tools() {
+        let tool = UniversalTool {
+            name: "search".to_string(),
+            description: None,
+            input_schema: Some(json!({ "type": "object" })),
+            strict: Some(true),
+            extensions: Default::default(),
+        };
+
+        let encoded = tool_to_anthropic(&tool);
+
+        assert!(encoded.get("strict").is_none());
+        assert!(encoded["input_schema"].get("strict").is_none());
     }
 }

@@ -70,6 +70,7 @@ pub(crate) fn openai_tool_from_value(value: &Value) -> Option<UniversalTool> {
             .get("parameters")
             .or_else(|| function.get("input_schema"))
             .cloned(),
+        strict: function.get("strict").and_then(Value::as_bool),
         extensions: empty_extensions(),
     })
 }
@@ -87,6 +88,9 @@ pub(crate) fn tool_to_openai_chat(tool: &UniversalTool) -> Value {
         "parameters".to_string(),
         sanitize_openai_parameters(tool.input_schema.as_ref()),
     );
+    if let Some(strict) = tool.strict {
+        function.insert("strict".to_string(), Value::Bool(strict));
+    }
     json!({
         "type": "function",
         "function": function
@@ -107,6 +111,9 @@ pub(crate) fn tool_to_openai_responses(tool: &UniversalTool) -> Value {
         "parameters".to_string(),
         sanitize_openai_parameters(tool.input_schema.as_ref()),
     );
+    if let Some(strict) = tool.strict {
+        object.insert("strict".to_string(), Value::Bool(strict));
+    }
     Value::Object(object)
 }
 
@@ -147,6 +154,7 @@ mod tests {
             name: "list_files".to_string(),
             description: None,
             input_schema: None,
+            strict: None,
             extensions: Default::default(),
         };
 
@@ -167,6 +175,7 @@ mod tests {
             name: "list_files".to_string(),
             description: None,
             input_schema: Some(json!({})),
+            strict: None,
             extensions: Default::default(),
         };
 
@@ -179,5 +188,45 @@ mod tests {
                 "properties": {}
             })
         );
+    }
+
+    #[test]
+    fn decodes_openai_strict_tool_setting() {
+        let chat_tool = openai_tool_from_value(&json!({
+            "type": "function",
+            "function": {
+                "name": "search",
+                "parameters": { "type": "object" },
+                "strict": true
+            }
+        }))
+        .expect("tool");
+        let responses_tool = openai_tool_from_value(&json!({
+            "type": "function",
+            "name": "search",
+            "parameters": { "type": "object" },
+            "strict": false
+        }))
+        .expect("tool");
+
+        assert_eq!(chat_tool.strict, Some(true));
+        assert_eq!(responses_tool.strict, Some(false));
+    }
+
+    #[test]
+    fn encodes_strict_for_openai_chat_and_responses_tools() {
+        let tool = UniversalTool {
+            name: "search".to_string(),
+            description: None,
+            input_schema: Some(json!({ "type": "object" })),
+            strict: Some(true),
+            extensions: Default::default(),
+        };
+
+        let chat = tool_to_openai_chat(&tool);
+        let responses = tool_to_openai_responses(&tool);
+
+        assert_eq!(chat["function"]["strict"], true);
+        assert_eq!(responses["strict"], true);
     }
 }
