@@ -14,7 +14,7 @@ Or add it manually:
 
 ```toml
 [dependencies]
-va-ai-api-bridge = "0.1.5"
+va-ai-api-bridge = "0.1.6"
 serde_json = "1"
 ```
 
