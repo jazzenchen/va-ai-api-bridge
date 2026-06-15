@@ -25,7 +25,10 @@ pub(in crate::translator::gemini_generate_content) fn decode_tools(
                     .get("description")
                     .and_then(Value::as_str)
                     .map(ToOwned::to_owned),
-                input_schema: declaration.get("parameters").cloned(),
+                input_schema: declaration
+                    .get("parameters")
+                    .map(|schema| sanitize_gemini_parameters(Some(schema))),
+                strict: None,
                 extensions: common::empty_extensions(),
             })
         })
@@ -263,6 +266,40 @@ mod tests {
     use super::*;
 
     #[test]
+    fn ignores_and_sanitizes_gemini_strict_tool_settings() {
+        let raw = json!([{
+            "functionDeclarations": [{
+                "name": "search",
+                "strict": true,
+                "parameters": {
+                    "type": "object",
+                    "strict": true,
+                    "properties": {
+                        "query": {
+                            "type": "string",
+                            "strict": true
+                        }
+                    }
+                }
+            }]
+        }]);
+
+        let decoded = decode_tools(Some(&raw));
+
+        assert_eq!(decoded[0].strict, None);
+        assert!(decoded[0]
+            .input_schema
+            .as_ref()
+            .and_then(|schema| schema.get("strict"))
+            .is_none());
+        assert!(decoded[0]
+            .input_schema
+            .as_ref()
+            .and_then(|schema| schema["properties"]["query"].get("strict"))
+            .is_none());
+    }
+
+    #[test]
     fn strips_unsupported_json_schema_keywords_from_tool_parameters() {
         let tool = UniversalTool {
             name: "list_rules".to_string(),
@@ -288,13 +325,17 @@ mod tests {
                 },
                 "required": ["filters"]
             })),
+            strict: Some(true),
             extensions: Default::default(),
         };
 
         let encoded = tools_to_gemini(&[tool]);
+        let declaration = &encoded[0]["functionDeclarations"][0];
+        assert!(declaration.get("strict").is_none());
         let parameters = &encoded[0]["functionDeclarations"][0]["parameters"];
 
         assert!(parameters.get("$schema").is_none());
+        assert!(parameters.get("strict").is_none());
         assert!(parameters.get("additionalProperties").is_none());
         assert_eq!(parameters["type"], "object");
         assert_eq!(parameters["required"], json!(["filters"]));
@@ -318,6 +359,7 @@ mod tests {
             name: "list_rules".to_string(),
             description: None,
             input_schema: None,
+            strict: None,
             extensions: Default::default(),
         };
 

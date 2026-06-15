@@ -11,10 +11,19 @@
 
 Related official references:
 
+- OpenAI function calling and strict mode: <https://developers.openai.com/api/docs/guides/function-calling>
 - Anthropic tool use: <https://docs.anthropic.com/en/docs/agents-and-tools/tool-use/overview>
 - Gemini function calling: <https://ai.google.dev/gemini-api/docs/function-calling>
 - Gemini thought signatures: <https://ai.google.dev/gemini-api/docs/thought-signatures>
 - Gemini OpenAI compatibility: <https://ai.google.dev/gemini-api/docs/openai>
+
+## Tool Strictness
+
+OpenAI exposes `strict` as a tool/function declaration option. The SDK maps that field into `UniversalTool.strict` from OpenAI Chat `tools[].function.strict` and OpenAI Responses `tools[].strict`, then writes it back only when the target protocol is OpenAI-compatible.
+
+Anthropic Messages and Gemini GenerateContent do not have an equivalent tool-level `strict` field. Their translators intentionally ignore or drop `UniversalTool.strict` instead of inventing a behavior the upstream API does not document.
+
+Do not put `strict` inside `input_schema` / Gemini `parameters`. It is not a portable JSON Schema keyword. Gemini request encoding and Gemini request decoding sanitize unsupported `strict` keys out of `functionDeclarations[].parameters`.
 
 ## Gemini Thought Signatures
 

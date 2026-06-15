@@ -23,11 +23,18 @@ pub(super) fn decode_chunk(raw: Value, state: &mut DecodeState) -> Result<Vec<Un
                 .as_deref()
                 .and_then(common::role_from_wire)
                 .unwrap_or(Role::Assistant);
-            if delta.role.is_some() || delta.content.is_some() || !delta.tool_calls.is_empty() {
+            let content_blocks: Vec<_> = openai::openai_content_to_blocks(delta.content.as_ref())
+                .into_iter()
+                .filter(|block| match block {
+                    ContentBlock::Text { text } => !text.is_empty(),
+                    _ => true,
+                })
+                .collect();
+            if delta.role.is_some() || !content_blocks.is_empty() || !delta.tool_calls.is_empty() {
                 common::ensure_message_start(&mut events, state, message_id.clone(), role);
             }
 
-            for block in openai::openai_content_to_blocks(delta.content.as_ref()) {
+            for block in content_blocks {
                 match block {
                     ContentBlock::Text { text } => {
                         let content_index = chat_content_index(state, choice_index, "text");

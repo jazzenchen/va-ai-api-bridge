@@ -193,6 +193,8 @@ pub struct UniversalTool {
     pub description: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub input_schema: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub strict: Option<bool>,
     #[serde(default, skip_serializing_if = "Extensions::is_empty")]
     pub extensions: Extensions,
 }
