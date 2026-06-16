@@ -1,8 +1,8 @@
 use serde_json::json;
 
 use crate::{
-    AnthropicMessagesTranslator, ContentBlock, Role, ServerToolKind, ToolChoice, UniversalItem,
-    UniversalRequest, WireTranslator,
+    AnthropicMessagesTranslator, ContentBlock, Role, ServerToolDeclaration, ServerToolKind,
+    ToolChoice, UniversalItem, UniversalRequest, WireProtocol, WireTranslator,
 };
 
 use super::encode;
@@ -322,5 +322,47 @@ fn decodes_anthropic_web_search_as_server_tool() {
         Some(ToolChoice::ServerTool {
             kind: ServerToolKind::WebSearch
         })
+    );
+}
+
+#[test]
+fn encodes_server_web_search_as_anthropic_native_tool() {
+    let request = UniversalRequest {
+        model: Some("deepseek-v4-pro".to_string()),
+        server_tools: vec![ServerToolDeclaration {
+            kind: ServerToolKind::WebSearch,
+            wire_type: "web_search".to_string(),
+            source_protocol: WireProtocol::OpenAiResponses,
+            name: None,
+            config: json!({
+                "include_domains": ["example.com"],
+                "exclude_domains": ["blocked.example"],
+                "search_context_size": "medium"
+            }),
+            raw: json!({ "type": "web_search" }),
+            extensions: Default::default(),
+        }],
+        tool_choice: Some(ToolChoice::ServerTool {
+            kind: ServerToolKind::WebSearch,
+        }),
+        ..UniversalRequest::default()
+    };
+
+    let encoded = encode(&request).expect("request encodes");
+
+    assert_eq!(encoded["tools"][0]["type"], "web_search_20250305");
+    assert_eq!(encoded["tools"][0]["name"], "web_search");
+    assert_eq!(
+        encoded["tools"][0]["allowed_domains"],
+        json!(["example.com"])
+    );
+    assert_eq!(
+        encoded["tools"][0]["blocked_domains"],
+        json!(["blocked.example"])
+    );
+    assert!(encoded["tools"][0].get("search_context_size").is_none());
+    assert_eq!(
+        encoded["tool_choice"],
+        json!({ "type": "tool", "name": "web_search" })
     );
 }

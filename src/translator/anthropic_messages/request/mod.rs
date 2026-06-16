@@ -70,17 +70,19 @@ pub(super) fn encode(request: &UniversalRequest) -> Result<Value> {
     if let Some(top_p) = request.generation.top_p {
         body.insert("top_p".to_string(), json!(top_p));
     }
-    if !request.tools.is_empty() {
-        body.insert(
-            "tools".to_string(),
-            Value::Array(
-                request
-                    .tools
-                    .iter()
-                    .map(anthropic::tool_to_anthropic)
-                    .collect(),
-            ),
-        );
+    let tools = request
+        .tools
+        .iter()
+        .map(anthropic::tool_to_anthropic)
+        .chain(
+            request
+                .server_tools
+                .iter()
+                .filter_map(anthropic::server_tool_to_anthropic),
+        )
+        .collect::<Vec<_>>();
+    if !tools.is_empty() {
+        body.insert("tools".to_string(), Value::Array(tools));
     }
     if let Some(tool_choice) = &request.tool_choice {
         body.insert(

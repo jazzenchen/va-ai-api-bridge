@@ -39,6 +39,12 @@ pub(crate) fn tool_choice_to_anthropic(value: &ToolChoice) -> Value {
             "type": "tool",
             "name": name
         }),
+        ToolChoice::ServerTool {
+            kind: ServerToolKind::WebSearch,
+        } => json!({
+            "type": "tool",
+            "name": "web_search"
+        }),
         ToolChoice::ServerTool { .. } => json!({ "type": "auto" }),
     }
 }
@@ -135,6 +141,65 @@ pub(crate) fn tool_to_anthropic(tool: &UniversalTool) -> Value {
         sanitize_anthropic_input_schema(tool.input_schema.as_ref()),
     );
     Value::Object(object)
+}
+
+pub(crate) fn server_tool_to_anthropic(tool: &ServerToolDeclaration) -> Option<Value> {
+    match tool.kind {
+        ServerToolKind::WebSearch => Some(web_search_server_tool_to_anthropic(tool)),
+        _ => None,
+    }
+}
+
+fn web_search_server_tool_to_anthropic(tool: &ServerToolDeclaration) -> Value {
+    let mut object = Map::new();
+    object.insert(
+        "type".to_string(),
+        Value::String("web_search_20250305".to_string()),
+    );
+    object.insert(
+        "name".to_string(),
+        Value::String(
+            tool.name
+                .clone()
+                .unwrap_or_else(|| "web_search".to_string()),
+        ),
+    );
+
+    if let Some(config) = tool.config.as_object() {
+        copy_config(config, &mut object, "max_uses", "max_uses");
+        copy_domain_config(
+            config,
+            &mut object,
+            &["allowed_domains", "include_domains"],
+            "allowed_domains",
+        );
+        copy_domain_config(
+            config,
+            &mut object,
+            &["blocked_domains", "exclude_domains"],
+            "blocked_domains",
+        );
+        copy_config(config, &mut object, "user_location", "user_location");
+    }
+
+    Value::Object(object)
+}
+
+fn copy_config(source: &Map<String, Value>, target: &mut Map<String, Value>, from: &str, to: &str) {
+    if let Some(value) = source.get(from) {
+        target.insert(to.to_string(), value.clone());
+    }
+}
+
+fn copy_domain_config(
+    source: &Map<String, Value>,
+    target: &mut Map<String, Value>,
+    from_keys: &[&str],
+    to: &str,
+) {
+    if let Some(value) = from_keys.iter().find_map(|key| source.get(*key)) {
+        target.insert(to.to_string(), value.clone());
+    }
 }
 
 fn sanitize_anthropic_input_schema(input_schema: Option<&Value>) -> Value {
