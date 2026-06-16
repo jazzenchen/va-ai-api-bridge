@@ -88,6 +88,7 @@ pub(in crate::translator::gemini_generate_content) fn tool_choice_to_gemini(
         ToolChoice::Tool { name } => {
             json!({ "functionCallingConfig": { "mode": "ANY", "allowedFunctionNames": [name] } })
         }
+        ToolChoice::ServerTool { .. } => json!({ "functionCallingConfig": { "mode": "AUTO" } }),
     }
 }
 

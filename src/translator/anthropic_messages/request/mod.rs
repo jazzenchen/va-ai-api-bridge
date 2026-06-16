@@ -12,6 +12,16 @@ pub(super) fn decode(raw: Value) -> Result<UniversalRequest> {
     let source_raw = raw.clone();
     let request: AnthropicMessagesRequest = serde_json::from_value(raw)
         .map_err(|error| ApiBridgeError::invalid_request(error.to_string()))?;
+    let server_tools: Vec<_> = request
+        .tools
+        .iter()
+        .filter_map(anthropic::anthropic_server_tool_from_value)
+        .collect();
+    let tool_choice = anthropic::server_tool_choice_from_anthropic_value(
+        request.tool_choice.as_ref(),
+        &server_tools,
+    )
+    .or_else(|| anthropic::tool_choice_from_anthropic_value(request.tool_choice.as_ref()));
 
     let mut universal = UniversalRequest {
         model: request.model,
@@ -21,7 +31,8 @@ pub(super) fn decode(raw: Value) -> Result<UniversalRequest> {
             .iter()
             .filter_map(anthropic::anthropic_tool_from_value)
             .collect(),
-        tool_choice: anthropic::tool_choice_from_anthropic_value(request.tool_choice.as_ref()),
+        server_tools,
+        tool_choice,
         stream: request.stream.unwrap_or(false),
         generation: anthropic::generation_from_anthropic(
             request.temperature,

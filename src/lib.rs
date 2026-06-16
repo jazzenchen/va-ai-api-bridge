@@ -36,6 +36,7 @@ pub use translator::{
     GEMINI_SKIP_THOUGHT_SIGNATURE_VALIDATOR,
 };
 pub use universal::{
-    ContentBlock, Extensions, FinishReason, GenerationConfig, ReasoningConfig, Role, SourcePayload,
-    ToolChoice, UniversalItem, UniversalRequest, UniversalResponse, UniversalTool, Usage,
+    ContentBlock, Extensions, FinishReason, GenerationConfig, ReasoningConfig, Role,
+    ServerToolDeclaration, ServerToolKind, SourcePayload, ToolChoice, UniversalItem,
+    UniversalRequest, UniversalResponse, UniversalTool, Usage,
 };

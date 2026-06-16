@@ -1,6 +1,9 @@
 use serde_json::json;
 
-use crate::{ContentBlock, Role, UniversalItem, UniversalRequest};
+use crate::{
+    AnthropicMessagesTranslator, ContentBlock, Role, ServerToolKind, ToolChoice, UniversalItem,
+    UniversalRequest, WireTranslator,
+};
 
 use super::encode;
 
@@ -282,4 +285,42 @@ fn moves_system_messages_to_top_level_system() {
     assert_eq!(encoded["system"][0]["type"], "text");
     assert_eq!(encoded["system"][0]["text"], "Be precise.");
     assert_eq!(encoded["system"][1]["text"], "Prefer JSON.");
+}
+
+#[test]
+fn decodes_anthropic_web_search_as_server_tool() {
+    let request = AnthropicMessagesTranslator
+        .decode_request(json!({
+            "model": "claude-sonnet-4-5",
+            "max_tokens": 1024,
+            "messages": [{ "role": "user", "content": "Find current docs." }],
+            "tools": [
+                {
+                    "type": "web_search_20250305",
+                    "name": "web_search",
+                    "max_uses": 2
+                },
+                {
+                    "name": "lookup",
+                    "description": "Lookup local docs.",
+                    "input_schema": { "type": "object" }
+                }
+            ],
+            "tool_choice": { "type": "tool", "name": "web_search" }
+        }))
+        .expect("request decodes");
+
+    assert_eq!(request.tools.len(), 1);
+    assert_eq!(request.tools[0].name, "lookup");
+    assert_eq!(request.server_tools.len(), 1);
+    assert_eq!(request.server_tools[0].kind, ServerToolKind::WebSearch);
+    assert_eq!(request.server_tools[0].wire_type, "web_search_20250305");
+    assert_eq!(request.server_tools[0].name.as_deref(), Some("web_search"));
+    assert_eq!(request.server_tools[0].config["max_uses"], 2);
+    assert_eq!(
+        request.tool_choice,
+        Some(ToolChoice::ServerTool {
+            kind: ServerToolKind::WebSearch
+        })
+    );
 }

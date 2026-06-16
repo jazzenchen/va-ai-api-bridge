@@ -19,7 +19,12 @@ pub(super) fn decode(raw: Value) -> Result<UniversalRequest> {
             .iter()
             .filter_map(openai::openai_tool_from_value)
             .collect(),
-        tool_choice: openai::tool_choice_from_openai_value(request.tool_choice.as_ref()),
+        server_tools: request
+            .tools
+            .iter()
+            .filter_map(openai::openai_server_tool_from_value)
+            .collect(),
+        tool_choice: openai::tool_choice_from_openai_responses_value(request.tool_choice.as_ref()),
         stream: request.stream.unwrap_or(false),
         generation: openai::generation_from_openai(
             request.temperature,
@@ -260,5 +265,49 @@ fn blocks_to_value(blocks: &[ContentBlock]) -> Value {
                 .map(|block| serde_json::to_value(block).unwrap_or(Value::Null))
                 .collect(),
         ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use crate::{OpenAiResponsesTranslator, ServerToolKind, ToolChoice, WireTranslator};
+
+    #[test]
+    fn decodes_responses_server_web_search_separately_from_function_tools() {
+        let request = OpenAiResponsesTranslator
+            .decode_request(json!({
+                "model": "gpt-5.5",
+                "input": "Find recent news.",
+                "tools": [
+                    {
+                        "type": "web_search",
+                        "search_context_size": "low",
+                        "allowed_domains": ["example.com"]
+                    },
+                    {
+                        "type": "function",
+                        "name": "list_files",
+                        "description": "List local files.",
+                        "parameters": { "type": "object" }
+                    }
+                ],
+                "tool_choice": { "type": "web_search" }
+            }))
+            .expect("request decodes");
+
+        assert_eq!(request.tools.len(), 1);
+        assert_eq!(request.tools[0].name, "list_files");
+        assert_eq!(request.server_tools.len(), 1);
+        assert_eq!(request.server_tools[0].kind, ServerToolKind::WebSearch);
+        assert_eq!(request.server_tools[0].wire_type, "web_search");
+        assert_eq!(request.server_tools[0].config["search_context_size"], "low");
+        assert_eq!(
+            request.tool_choice,
+            Some(ToolChoice::ServerTool {
+                kind: ServerToolKind::WebSearch
+            })
+        );
     }
 }

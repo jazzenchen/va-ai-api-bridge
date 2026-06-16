@@ -20,6 +20,8 @@ pub struct UniversalRequest {
     pub input: Vec<UniversalItem>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tools: Vec<UniversalTool>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub server_tools: Vec<ServerToolDeclaration>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_choice: Option<ToolChoice>,
     #[serde(default, skip_serializing_if = "is_false")]
@@ -183,6 +185,7 @@ pub enum ToolChoice {
     None,
     Required,
     Tool { name: String },
+    ServerTool { kind: ServerToolKind },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -195,6 +198,32 @@ pub struct UniversalTool {
     pub input_schema: Option<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub strict: Option<bool>,
+    #[serde(default, skip_serializing_if = "Extensions::is_empty")]
+    pub extensions: Extensions,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ServerToolKind {
+    WebSearch,
+    XSearch,
+    FileSearch,
+    CodeInterpreter,
+    CodeExecution,
+    Unknown,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ServerToolDeclaration {
+    pub kind: ServerToolKind,
+    pub wire_type: String,
+    pub source_protocol: WireProtocol,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Value::is_null")]
+    pub config: Value,
+    pub raw: Value,
     #[serde(default, skip_serializing_if = "Extensions::is_empty")]
     pub extensions: Extensions,
 }

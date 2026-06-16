@@ -7,7 +7,7 @@ A host bridge combines this crate with routing, credentials, profiles, model met
 1. Resolve the agent-facing source protocol from the route.
 2. Decode the incoming JSON body with the source translator.
 3. Resolve the profile, upstream provider, target protocol, and final target model.
-4. Apply host policy to the IR: model mapping, media capability handling, defaults, or profile-specific metadata.
+4. Apply host policy to the IR: model mapping, media capability handling, server-tool fallback, defaults, or profile-specific metadata.
 5. Encode the IR with the target translator.
 6. Apply the provider adapter request transform.
 7. Send the JSON body to the upstream provider with host-managed auth and headers.
@@ -38,6 +38,18 @@ fn apply_model_policy(request: &mut UniversalRequest, model: &ResolvedModelSpec)
 ```
 
 The resolved model spec should represent the final upstream model after alias mapping and profile overrides. Endpoint-level capabilities and model-level capabilities can be merged with `ModelCapabilities::union`.
+
+## Server Tool Policy
+
+`UniversalRequest.server_tools` records provider-native server tool declarations from the agent-facing request. These declarations are intentionally separate from `UniversalRequest.tools`, which contains function tools that the host or agent can execute after the model emits arguments.
+
+The SDK preserves server-tool intent but does not execute it. Host policy should run after routing has selected the final provider:
+
+1. If the provider and target protocol support the server tool natively, the host can preserve or re-inject the native declaration before sending upstream.
+2. If the provider lacks native support but supports function tools, the host can inject a fallback function tool into `request.tools` and run the resulting tool call loop itself.
+3. If neither native server tools nor function tools are available, the host should return a clear unsupported error or apply a host-specific context-injection fallback.
+
+For web search, this means the bridge host can recognize `ServerToolKind::WebSearch`, inject a host-owned search function, execute the search provider outside this crate, append the tool result, and continue the upstream model call.
 
 ## Gemini Tool History
 
