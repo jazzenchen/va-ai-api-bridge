@@ -58,9 +58,65 @@ fn disables_anthropic_thinking_for_forced_tool_choice() {
         "tool_choice": { "type": "tool", "name": "lookup" }
     });
 
-    adapter.prepare_anthropic_request(&mut request);
+    adapter.prepare_anthropic_request(ProviderRequestSource::AnthropicMessages, &mut request);
 
     assert_eq!(request["thinking"]["type"], "disabled");
+}
+
+#[test]
+fn disables_cross_protocol_anthropic_thinking_for_native_web_search() {
+    let mut adapter = DeepSeekBridgeAdapter::new(DeepSeekBridgeSettings::default());
+    let mut request = json!({
+        "model": "deepseek-v4-pro",
+        "thinking": { "type": "enabled", "budget_tokens": 2048 },
+        "messages": [{ "role": "user", "content": "today's news" }],
+        "tools": [{
+            "type": "web_search_20250305",
+            "name": "web_search"
+        }]
+    });
+
+    adapter.prepare_anthropic_request(ProviderRequestSource::OpenAiResponses, &mut request);
+
+    assert_eq!(request["thinking"], json!({ "type": "disabled" }));
+}
+
+#[test]
+fn preserves_anthropic_thinking_for_native_web_search_from_anthropic_source() {
+    let mut adapter = DeepSeekBridgeAdapter::new(DeepSeekBridgeSettings::default());
+    let mut request = json!({
+        "model": "deepseek-v4-pro",
+        "thinking": { "type": "enabled", "budget_tokens": 2048 },
+        "messages": [{ "role": "user", "content": "today's news" }],
+        "tools": [{
+            "type": "web_search_20250305",
+            "name": "web_search"
+        }]
+    });
+
+    adapter.prepare_anthropic_request(ProviderRequestSource::AnthropicMessages, &mut request);
+
+    assert_eq!(
+        request["thinking"],
+        json!({ "type": "enabled", "budget_tokens": 2048 })
+    );
+}
+
+#[test]
+fn leaves_cross_protocol_native_web_search_without_thinking_unchanged() {
+    let mut adapter = DeepSeekBridgeAdapter::new(DeepSeekBridgeSettings::default());
+    let mut request = json!({
+        "model": "deepseek-v4-pro",
+        "messages": [{ "role": "user", "content": "today's news" }],
+        "tools": [{
+            "type": "web_search_20250305",
+            "name": "web_search"
+        }]
+    });
+
+    adapter.prepare_anthropic_request(ProviderRequestSource::OpenAiResponses, &mut request);
+
+    assert!(request.get("thinking").is_none());
 }
 
 #[test]
@@ -627,7 +683,7 @@ fn moves_anthropic_thinking_before_deepseek_tool_use_history() {
     });
     let mut adapter = DeepSeekBridgeAdapter::new(DeepSeekBridgeSettings::default());
 
-    adapter.prepare_anthropic_request(&mut request);
+    adapter.prepare_anthropic_request(ProviderRequestSource::AnthropicMessages, &mut request);
 
     let content = request["messages"][0]["content"].as_array().unwrap();
     assert_eq!(content[0]["type"], "thinking");
@@ -656,7 +712,7 @@ fn does_not_move_anthropic_thinking_across_text_blocks() {
     });
     let mut adapter = DeepSeekBridgeAdapter::new(DeepSeekBridgeSettings::default());
 
-    adapter.prepare_anthropic_request(&mut request);
+    adapter.prepare_anthropic_request(ProviderRequestSource::AnthropicMessages, &mut request);
 
     let content = request["messages"][0]["content"].as_array().unwrap();
     assert_eq!(content[0]["type"], "text");
