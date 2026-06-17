@@ -14,7 +14,7 @@ Or add it manually:
 
 ```toml
 [dependencies]
-va-ai-api-bridge = "0.1.5"
+va-ai-api-bridge = "0.1.6"
 serde_json = "1"
 ```
 
@@ -59,6 +59,18 @@ Start with the [documentation index](docs/README.md).
 - [Universal IR](docs/concepts/universal-ir.md): request, response, item, content, tool, reasoning, and usage model.
 - [Media content](docs/concepts/media-content.md): image/file representation and safe handling when providers lack media support.
 - [Provider adapters](docs/guides/provider-adapters.md): how provider-specific quirks fit around protocol translation.
+
+## Server Tool Capability Support
+
+Recent Claude Desktop and Claude Code bridge testing showed that tool translation needs a more explicit capability model. Anthropic-style server tools such as `web_search_20250305` are not equivalent to client-executed function tools: some Anthropic-compatible providers execute them server-side, some reject or ignore them, and OpenAI Chat-style function tools only ask the model to emit arguments for the host to run.
+
+The IR now keeps known server-tool declarations in `UniversalRequest.server_tools` instead of flattening them into ordinary function tools. The host remains responsible for deciding whether to preserve native server tools, drop them, or inject host-executed fallback function tools.
+
+Follow-up work:
+
+- Track hosted/server tool support separately from function-calling support in host capability metadata.
+- Add route-level policy for unsupported server tools: preserve and route to a compatible API, drop with a clear fallback, or replace with a host-executed tool only when the host can actually run it.
+- Add request/response fixtures for Claude `WebSearch` sidecar requests, including the Anthropic `web_search_20250305` shape and the current OpenAI Chat downgrade failure mode.
 
 ## Boundary
 

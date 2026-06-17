@@ -332,3 +332,30 @@ fn fills_content_on_passthrough_chat_messages_without_content() {
     assert_eq!(messages[0]["content"], "");
     assert_eq!(messages[0]["tool_calls"][0]["id"], "call_123");
 }
+
+#[test]
+fn chat_function_named_web_search_stays_a_function_tool() {
+    let request = decode(json!({
+        "model": "chat-model",
+        "messages": [{ "role": "user", "content": "Search the web." }],
+        "tools": [{
+            "type": "function",
+            "function": {
+                "name": "web_search",
+                "description": "Host-provided search function.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": { "type": "string" }
+                    },
+                    "required": ["query"]
+                }
+            }
+        }]
+    }))
+    .expect("request decodes");
+
+    assert_eq!(request.tools.len(), 1);
+    assert_eq!(request.tools[0].name, "web_search");
+    assert!(request.server_tools.is_empty());
+}
