@@ -30,6 +30,7 @@ pub(super) fn encode(events: &[UniversalEvent], state: &mut EncodeState) -> Resu
                 })))
             }
             UniversalEvent::ContentStart { index, block } => {
+                close_open_content_blocks_before_start(state, &mut wire_events, *index);
                 reserve_index(state, *index);
                 remember_content_started(state, *index);
                 match block {
