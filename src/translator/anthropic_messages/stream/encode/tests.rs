@@ -121,3 +121,73 @@ fn response_done_closes_open_text_block_before_message_delta() {
     assert!(stop_index < delta_index);
     assert_eq!(events[stop_index].data["index"], 0);
 }
+
+#[test]
+fn new_content_start_closes_previous_stream_block() {
+    let mut state = EncodeState::default();
+    let first = encode(
+        &[
+            UniversalEvent::ResponseStart {
+                id: Some("msg_1".to_string()),
+                model: Some("deepseek-v4-flash".to_string()),
+                extensions: Default::default(),
+            },
+            UniversalEvent::ContentStart {
+                index: 0,
+                block: ContentBlock::Reasoning {
+                    text: Some(String::new()),
+                    encrypted: None,
+                    extensions: Default::default(),
+                },
+            },
+            UniversalEvent::ReasoningDelta {
+                index: 0,
+                text: "Thinking".to_string(),
+            },
+        ],
+        &mut state,
+    )
+    .expect("first events encode");
+    assert!(!first
+        .iter()
+        .any(|event| event.data["type"] == "content_block_stop"));
+
+    let second = encode(
+        &[
+            UniversalEvent::ContentStart {
+                index: 1,
+                block: ContentBlock::Text {
+                    text: String::new(),
+                },
+            },
+            UniversalEvent::TextDelta {
+                index: 1,
+                text: "Answer".to_string(),
+            },
+            UniversalEvent::MessageDone {
+                finish_reason: Some(crate::FinishReason::Stop),
+                usage: None,
+                extensions: Default::default(),
+            },
+            UniversalEvent::ResponseDone {
+                usage: None,
+                extensions: Default::default(),
+            },
+        ],
+        &mut state,
+    )
+    .expect("second events encode");
+
+    assert_eq!(second[0].data["type"], "content_block_stop");
+    assert_eq!(second[0].data["index"], 0);
+    assert_eq!(second[1].data["type"], "content_block_start");
+    assert_eq!(second[1].data["index"], 1);
+
+    let stop_zero_count = second
+        .iter()
+        .filter(|event| {
+            event.data["type"] == "content_block_stop" && event.data["index"] == json!(0)
+        })
+        .count();
+    assert_eq!(stop_zero_count, 1);
+}

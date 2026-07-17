@@ -13,6 +13,7 @@ pub(super) fn decode_chunk(raw: Value, state: &mut DecodeState) -> Result<Vec<Un
     common::ensure_response_start(&mut events, state, chunk.id.clone(), chunk.model.clone());
 
     let usage = openai::openai_usage_to_universal(chunk.usage.as_ref());
+    let has_choices = !chunk.choices.is_empty();
     for choice in chunk.choices {
         let choice_index = choice.index.unwrap_or(0) as usize;
         let message_id = response_message_id(chunk.id.as_deref(), choice.index);
@@ -97,9 +98,14 @@ pub(super) fn decode_chunk(raw: Value, state: &mut DecodeState) -> Result<Vec<Un
             }
         }
 
-        if choice.finish_reason.is_some() {
+        let finish_reason = choice
+            .finish_reason
+            .as_deref()
+            .map(str::trim)
+            .filter(|reason| !reason.is_empty());
+        if finish_reason.is_some() {
             events.push(UniversalEvent::MessageDone {
-                finish_reason: openai::finish_from_openai(choice.finish_reason.as_deref()),
+                finish_reason: openai::finish_from_openai(finish_reason),
                 usage: usage.clone(),
                 extensions: common::empty_extensions(),
             });
@@ -112,7 +118,7 @@ pub(super) fn decode_chunk(raw: Value, state: &mut DecodeState) -> Result<Vec<Un
         }
     }
 
-    if usage.is_some() && common::mark_once(state, "response_done") {
+    if !has_choices && usage.is_some() && common::mark_once(state, "response_done") {
         events.push(UniversalEvent::ResponseDone {
             usage,
             extensions: common::empty_extensions(),
@@ -287,6 +293,95 @@ mod tests {
         assert!(events.iter().any(|event| matches!(
             event,
             UniversalEvent::ReasoningDelta { text, .. } if text == "Need to inspect files."
+        )));
+    }
+
+    #[test]
+    fn ignores_empty_stream_finish_reason() {
+        let mut state = DecodeState::default();
+        let events = decode_chunk(
+            json!({
+                "id": "chatcmpl_1",
+                "model": "deepseek-v4-flash",
+                "choices": [{
+                    "index": 0,
+                    "delta": {
+                        "role": "assistant",
+                        "reasoning_content": "Thinking"
+                    },
+                    "finish_reason": ""
+                }]
+            }),
+            &mut state,
+        )
+        .expect("chunk decodes");
+
+        assert!(events.iter().any(|event| matches!(
+            event,
+            UniversalEvent::ReasoningDelta { text, .. } if text == "Thinking"
+        )));
+        assert!(!events.iter().any(|event| matches!(
+            event,
+            UniversalEvent::MessageDone { .. } | UniversalEvent::ResponseDone { .. }
+        )));
+    }
+
+    #[test]
+    fn ignores_usage_on_non_final_stream_chunks() {
+        let mut state = DecodeState::default();
+        let events = decode_chunk(
+            json!({
+                "id": "chatcmpl_1",
+                "model": "deepseek-v4-flash",
+                "choices": [{
+                    "index": 0,
+                    "delta": {
+                        "role": "assistant",
+                        "content": "Hi"
+                    },
+                    "finish_reason": null
+                }],
+                "usage": {
+                    "prompt_tokens": 1,
+                    "completion_tokens": 1,
+                    "total_tokens": 2
+                }
+            }),
+            &mut state,
+        )
+        .expect("chunk decodes");
+
+        assert!(events.iter().any(|event| matches!(
+            event,
+            UniversalEvent::TextDelta { text, .. } if text == "Hi"
+        )));
+        assert!(!events
+            .iter()
+            .any(|event| matches!(event, UniversalEvent::ResponseDone { .. })));
+    }
+
+    #[test]
+    fn emits_response_done_for_usage_only_stream_chunk() {
+        let mut state = DecodeState::default();
+        let events = decode_chunk(
+            json!({
+                "id": "chatcmpl_1",
+                "model": "deepseek-v4-flash",
+                "choices": [],
+                "usage": {
+                    "prompt_tokens": 1,
+                    "completion_tokens": 1,
+                    "total_tokens": 2
+                }
+            }),
+            &mut state,
+        )
+        .expect("chunk decodes");
+
+        assert!(events.iter().any(|event| matches!(
+            event,
+            UniversalEvent::ResponseDone { usage: Some(usage), .. }
+                if usage.total_tokens == Some(2)
         )));
     }
 
