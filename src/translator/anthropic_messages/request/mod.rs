@@ -12,6 +12,16 @@ pub(super) fn decode(raw: Value) -> Result<UniversalRequest> {
     let source_raw = raw.clone();
     let request: AnthropicMessagesRequest = serde_json::from_value(raw)
         .map_err(|error| ApiBridgeError::invalid_request(error.to_string()))?;
+    let server_tools: Vec<_> = request
+        .tools
+        .iter()
+        .filter_map(anthropic::anthropic_server_tool_from_value)
+        .collect();
+    let tool_choice = anthropic::server_tool_choice_from_anthropic_value(
+        request.tool_choice.as_ref(),
+        &server_tools,
+    )
+    .or_else(|| anthropic::tool_choice_from_anthropic_value(request.tool_choice.as_ref()));
 
     let mut universal = UniversalRequest {
         model: request.model,
@@ -21,7 +31,8 @@ pub(super) fn decode(raw: Value) -> Result<UniversalRequest> {
             .iter()
             .filter_map(anthropic::anthropic_tool_from_value)
             .collect(),
-        tool_choice: anthropic::tool_choice_from_anthropic_value(request.tool_choice.as_ref()),
+        server_tools,
+        tool_choice,
         stream: request.stream.unwrap_or(false),
         generation: anthropic::generation_from_anthropic(
             request.temperature,
@@ -59,17 +70,19 @@ pub(super) fn encode(request: &UniversalRequest) -> Result<Value> {
     if let Some(top_p) = request.generation.top_p {
         body.insert("top_p".to_string(), json!(top_p));
     }
-    if !request.tools.is_empty() {
-        body.insert(
-            "tools".to_string(),
-            Value::Array(
-                request
-                    .tools
-                    .iter()
-                    .map(anthropic::tool_to_anthropic)
-                    .collect(),
-            ),
-        );
+    let tools = request
+        .tools
+        .iter()
+        .map(anthropic::tool_to_anthropic)
+        .chain(
+            request
+                .server_tools
+                .iter()
+                .filter_map(anthropic::server_tool_to_anthropic),
+        )
+        .collect::<Vec<_>>();
+    if !tools.is_empty() {
+        body.insert("tools".to_string(), Value::Array(tools));
     }
     if let Some(tool_choice) = &request.tool_choice {
         body.insert(

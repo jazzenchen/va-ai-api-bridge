@@ -11,6 +11,7 @@ The Universal IR is the crate's shared vocabulary. Translators should map protoc
 | `instructions` | System/developer instructions separated from conversational input. |
 | `input` | Ordered messages, tool calls, tool results, reasoning items, and unknown items. |
 | `tools` | Function/tool declarations with JSON schemas plus tool-level metadata such as OpenAI strictness. |
+| `server_tools` | Provider-native server tool declarations requested by the agent, such as OpenAI Responses `web_search` or Anthropic `web_search_20250305`. These are not client-executed function tools. |
 | `tool_choice` | Tool selection policy: auto, none, required, or a specific tool. |
 | `stream` | Whether the caller requested streaming. |
 | `generation` | Temperature, top-p, output limit, and extension settings. |
@@ -56,3 +57,11 @@ The Universal IR is the crate's shared vocabulary. Translators should map protoc
 - OpenAI Responses decodes and encodes it at `tools[].strict`.
 - Anthropic Messages has no equivalent tool-level field, so translators ignore or drop it.
 - Gemini GenerateContent has no equivalent tool-level field, so translators ignore or drop it and also sanitize unsupported `strict` keys out of Gemini `parameters` schemas.
+
+## Server Tools
+
+`UniversalTool` represents a function tool: the model emits arguments, and the host or agent executes the call. `ServerToolDeclaration` represents a provider/server-side capability requested in the wire request. Translators should keep these separate so a native server tool is not accidentally downgraded into a client-executed function.
+
+Current decoders preserve known server tools in `UniversalRequest.server_tools`, including OpenAI Responses `web_search`, `web_search_preview`, `x_search`, `file_search`, `code_interpreter`, `code_execution`, and Anthropic Messages `web_search_20250305`.
+
+The SDK does not execute server tools or consume their results. A host policy can decide to route to a provider that supports the server tool natively, drop it, or inject a host-executed fallback function tool and run the tool loop outside this crate.

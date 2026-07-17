@@ -75,6 +75,28 @@ pub(super) fn close_open_content_blocks(state: &mut EncodeState, wire_events: &m
     }
 }
 
+pub(super) fn close_open_content_blocks_before_start(
+    state: &mut EncodeState,
+    wire_events: &mut Vec<WireEvent>,
+    next_index: usize,
+) {
+    for index in content_block_indexes(state) {
+        if index == next_index || content_block_closed(state, index) {
+            continue;
+        }
+        remember_content_closed(state, index);
+        if let Some(id) = tool_id_for_index(state, index) {
+            state
+                .extensions
+                .insert(tool_closed_key(&id), Value::Bool(true));
+        }
+        wire_events.push(common::wire_event(json!({
+            "type": "content_block_stop",
+            "index": index
+        })));
+    }
+}
+
 pub(super) fn close_open_tool_blocks(state: &mut EncodeState, wire_events: &mut Vec<WireEvent>) {
     for id in tool_ids(state) {
         let previous = state

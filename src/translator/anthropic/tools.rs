@@ -1,6 +1,6 @@
 use serde_json::{json, Map, Value};
 
-use crate::{ToolChoice, UniversalTool};
+use crate::{ServerToolDeclaration, ServerToolKind, ToolChoice, UniversalTool, WireProtocol};
 
 use super::super::common::empty_extensions;
 
@@ -39,11 +39,26 @@ pub(crate) fn tool_choice_to_anthropic(value: &ToolChoice) -> Value {
             "type": "tool",
             "name": name
         }),
+        ToolChoice::ServerTool {
+            kind: ServerToolKind::WebSearch,
+        } => json!({
+            "type": "tool",
+            "name": "web_search"
+        }),
+        ToolChoice::ServerTool { .. } => json!({ "type": "auto" }),
     }
 }
 
 pub(crate) fn anthropic_tool_from_value(value: &Value) -> Option<UniversalTool> {
     let object = value.as_object()?;
+    if object
+        .get("type")
+        .and_then(Value::as_str)
+        .and_then(anthropic_server_tool_kind)
+        .is_some()
+    {
+        return None;
+    }
     let name = object
         .get("name")
         .and_then(Value::as_str)
@@ -61,6 +76,57 @@ pub(crate) fn anthropic_tool_from_value(value: &Value) -> Option<UniversalTool> 
     })
 }
 
+pub(crate) fn anthropic_server_tool_from_value(value: &Value) -> Option<ServerToolDeclaration> {
+    let object = value.as_object()?;
+    let wire_type = object.get("type").and_then(Value::as_str)?;
+    let kind = anthropic_server_tool_kind(wire_type)?;
+    Some(ServerToolDeclaration {
+        kind,
+        wire_type: wire_type.to_string(),
+        source_protocol: WireProtocol::AnthropicMessages,
+        name: object
+            .get("name")
+            .and_then(Value::as_str)
+            .map(ToString::to_string),
+        config: server_tool_config(object),
+        raw: value.clone(),
+        extensions: empty_extensions(),
+    })
+}
+
+pub(crate) fn server_tool_choice_from_anthropic_value(
+    value: Option<&Value>,
+    server_tools: &[ServerToolDeclaration],
+) -> Option<ToolChoice> {
+    let object = value?.as_object()?;
+    if object.get("type").and_then(Value::as_str) != Some("tool") {
+        return None;
+    }
+    let name = object.get("name").and_then(Value::as_str)?;
+    server_tools
+        .iter()
+        .find(|tool| tool.name.as_deref() == Some(name))
+        .map(|tool| ToolChoice::ServerTool { kind: tool.kind })
+}
+
+fn anthropic_server_tool_kind(wire_type: &str) -> Option<ServerToolKind> {
+    match wire_type {
+        "web_search_20250305" => Some(ServerToolKind::WebSearch),
+        _ => None,
+    }
+}
+
+fn server_tool_config(object: &Map<String, Value>) -> Value {
+    let mut config = object.clone();
+    config.remove("type");
+    config.remove("name");
+    if config.is_empty() {
+        Value::Null
+    } else {
+        Value::Object(config)
+    }
+}
+
 pub(crate) fn tool_to_anthropic(tool: &UniversalTool) -> Value {
     let mut object = Map::new();
     object.insert("name".to_string(), Value::String(tool.name.clone()));
@@ -75,6 +141,65 @@ pub(crate) fn tool_to_anthropic(tool: &UniversalTool) -> Value {
         sanitize_anthropic_input_schema(tool.input_schema.as_ref()),
     );
     Value::Object(object)
+}
+
+pub(crate) fn server_tool_to_anthropic(tool: &ServerToolDeclaration) -> Option<Value> {
+    match tool.kind {
+        ServerToolKind::WebSearch => Some(web_search_server_tool_to_anthropic(tool)),
+        _ => None,
+    }
+}
+
+fn web_search_server_tool_to_anthropic(tool: &ServerToolDeclaration) -> Value {
+    let mut object = Map::new();
+    object.insert(
+        "type".to_string(),
+        Value::String("web_search_20250305".to_string()),
+    );
+    object.insert(
+        "name".to_string(),
+        Value::String(
+            tool.name
+                .clone()
+                .unwrap_or_else(|| "web_search".to_string()),
+        ),
+    );
+
+    if let Some(config) = tool.config.as_object() {
+        copy_config(config, &mut object, "max_uses", "max_uses");
+        copy_domain_config(
+            config,
+            &mut object,
+            &["allowed_domains", "include_domains"],
+            "allowed_domains",
+        );
+        copy_domain_config(
+            config,
+            &mut object,
+            &["blocked_domains", "exclude_domains"],
+            "blocked_domains",
+        );
+        copy_config(config, &mut object, "user_location", "user_location");
+    }
+
+    Value::Object(object)
+}
+
+fn copy_config(source: &Map<String, Value>, target: &mut Map<String, Value>, from: &str, to: &str) {
+    if let Some(value) = source.get(from) {
+        target.insert(to.to_string(), value.clone());
+    }
+}
+
+fn copy_domain_config(
+    source: &Map<String, Value>,
+    target: &mut Map<String, Value>,
+    from_keys: &[&str],
+    to: &str,
+) {
+    if let Some(value) = from_keys.iter().find_map(|key| source.get(*key)) {
+        target.insert(to.to_string(), value.clone());
+    }
 }
 
 fn sanitize_anthropic_input_schema(input_schema: Option<&Value>) -> Value {

@@ -80,12 +80,16 @@ impl DeepSeekBridgeAdapter {
         );
     }
 
-    pub fn prepare_anthropic_request(&mut self, request: &mut Value) {
+    pub fn prepare_anthropic_request(
+        &mut self,
+        source: ProviderRequestSource,
+        request: &mut Value,
+    ) {
         repair_anthropic_thinking_tool_use_order(request);
         let Some(object) = request.as_object_mut() else {
             return;
         };
-        if self.settings.thinking && has_forced_tool_choice(object.get("tool_choice")) {
+        if self.anthropic_thinking_must_be_disabled(source, object) {
             object.insert(
                 "thinking".to_string(),
                 json!({
@@ -93,6 +97,23 @@ impl DeepSeekBridgeAdapter {
                 }),
             );
         }
+    }
+
+    fn anthropic_thinking_must_be_disabled(
+        &self,
+        source: ProviderRequestSource,
+        request: &serde_json::Map<String, Value>,
+    ) -> bool {
+        if !self.anthropic_thinking_is_enabled(request) {
+            return false;
+        }
+        has_forced_tool_choice(request.get("tool_choice"))
+            || (source != ProviderRequestSource::AnthropicMessages
+                && has_anthropic_native_web_search_tool(request.get("tools")))
+    }
+
+    fn anthropic_thinking_is_enabled(&self, request: &serde_json::Map<String, Value>) -> bool {
+        self.settings.thinking || request_anthropic_thinking_is_enabled(request.get("thinking"))
     }
 
     fn should_replay_reasoning_content(&self, source: ProviderRequestSource) -> bool {
@@ -122,6 +143,24 @@ fn has_forced_tool_choice(tool_choice: Option<&Value>) -> bool {
             .is_some_and(|kind| matches!(kind, "function" | "tool" | "any")),
         _ => false,
     }
+}
+
+fn has_anthropic_native_web_search_tool(tools: Option<&Value>) -> bool {
+    tools
+        .and_then(Value::as_array)
+        .is_some_and(|tools| tools.iter().any(is_anthropic_native_web_search_tool))
+}
+
+fn is_anthropic_native_web_search_tool(tool: &Value) -> bool {
+    tool.get("type").and_then(Value::as_str) == Some("web_search_20250305")
+}
+
+fn request_anthropic_thinking_is_enabled(thinking: Option<&Value>) -> bool {
+    thinking
+        .and_then(Value::as_object)
+        .and_then(|thinking| thinking.get("type"))
+        .and_then(Value::as_str)
+        .is_some_and(|kind| matches!(kind, "enabled" | "adaptive"))
 }
 
 #[cfg(test)]

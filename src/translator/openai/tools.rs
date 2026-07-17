@@ -1,6 +1,6 @@
 use serde_json::{json, Map, Value};
 
-use crate::{ToolChoice, UniversalTool};
+use crate::{ServerToolDeclaration, ServerToolKind, ToolChoice, UniversalTool, WireProtocol};
 
 use super::super::common::empty_extensions;
 
@@ -25,6 +25,18 @@ pub(crate) fn tool_choice_from_openai_value(value: Option<&Value>) -> Option<Too
     }
 }
 
+pub(crate) fn tool_choice_from_openai_responses_value(value: Option<&Value>) -> Option<ToolChoice> {
+    match value {
+        Some(Value::Object(object)) => object
+            .get("type")
+            .and_then(Value::as_str)
+            .and_then(openai_server_tool_kind)
+            .map(|kind| ToolChoice::ServerTool { kind })
+            .or_else(|| tool_choice_from_openai_value(value)),
+        _ => tool_choice_from_openai_value(value),
+    }
+}
+
 pub(crate) fn tool_choice_to_openai(value: &ToolChoice) -> Value {
     match value {
         ToolChoice::Auto => json!("auto"),
@@ -34,6 +46,7 @@ pub(crate) fn tool_choice_to_openai(value: &ToolChoice) -> Value {
             "type": "function",
             "function": { "name": name }
         }),
+        ToolChoice::ServerTool { .. } => json!("auto"),
     }
 }
 
@@ -46,11 +59,20 @@ pub(crate) fn tool_choice_to_openai_responses(value: &ToolChoice) -> Value {
             "type": "function",
             "name": name
         }),
+        ToolChoice::ServerTool { .. } => json!("auto"),
     }
 }
 
 pub(crate) fn openai_tool_from_value(value: &Value) -> Option<UniversalTool> {
     let object = value.as_object()?;
+    if object
+        .get("type")
+        .and_then(Value::as_str)
+        .and_then(openai_server_tool_kind)
+        .is_some()
+    {
+        return None;
+    }
     let function = object
         .get("function")
         .and_then(Value::as_object)
@@ -73,6 +95,46 @@ pub(crate) fn openai_tool_from_value(value: &Value) -> Option<UniversalTool> {
         strict: function.get("strict").and_then(Value::as_bool),
         extensions: empty_extensions(),
     })
+}
+
+pub(crate) fn openai_server_tool_from_value(value: &Value) -> Option<ServerToolDeclaration> {
+    let object = value.as_object()?;
+    let wire_type = object.get("type").and_then(Value::as_str)?;
+    let kind = openai_server_tool_kind(wire_type)?;
+    Some(ServerToolDeclaration {
+        kind,
+        wire_type: wire_type.to_string(),
+        source_protocol: WireProtocol::OpenAiResponses,
+        name: object
+            .get("name")
+            .and_then(Value::as_str)
+            .map(ToString::to_string),
+        config: server_tool_config(object),
+        raw: value.clone(),
+        extensions: empty_extensions(),
+    })
+}
+
+fn openai_server_tool_kind(wire_type: &str) -> Option<ServerToolKind> {
+    match wire_type {
+        "web_search" | "web_search_preview" => Some(ServerToolKind::WebSearch),
+        "x_search" => Some(ServerToolKind::XSearch),
+        "file_search" => Some(ServerToolKind::FileSearch),
+        "code_interpreter" => Some(ServerToolKind::CodeInterpreter),
+        "code_execution" => Some(ServerToolKind::CodeExecution),
+        _ => None,
+    }
+}
+
+fn server_tool_config(object: &Map<String, Value>) -> Value {
+    let mut config = object.clone();
+    config.remove("type");
+    config.remove("name");
+    if config.is_empty() {
+        Value::Null
+    } else {
+        Value::Object(config)
+    }
 }
 
 pub(crate) fn tool_to_openai_chat(tool: &UniversalTool) -> Value {
